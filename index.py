@@ -42,15 +42,15 @@ async def send_to_telegram(sms):
     """Send SMS details to Telegram group with copiable number."""
     bot = Bot(token=os.getenv("BOT_TOKEN"))
     message = (
-        f"New SMS Received:\n"
-        f"Timestamp: {sms['timestamp']}\n"
-        f"Number: +{sms['number']}\n"
-        f"Message: {sms['message']}\n"
-        f"Range: {sms['range']}\n"
-        f"Revenue: {sms['revenue']}"
+    "📨 *New SMS Received*\n\n"
+    f"🕒 *Timestamp*: {sms['timestamp']}\n"
+    f"📞 *Number*: `{sms['number']}`\n"
+    f"💬 *Message*: {sms['message']}\n"
     )
+
+
     try:
-        await bot.send_message(chat_id=os.getenv("CHAT_ID"), text=message)
+        await bot.send_message(chat_id=os.getenv("CHAT_ID"), text=message,parse_mode="Markdown")
         logger.info(f"Sent SMS to Telegram: {sms['message'][:50]}...")
     except Exception as e:
         logger.error(f"Failed to send to Telegram: {str(e)}")
@@ -501,6 +501,6 @@ async def main():
     except Exception as e:
         logger.error(f"Main loop failed: {str(e)}")
         raise
-    
+
 if __name__ == "__main__":
     asyncio.run(main())
