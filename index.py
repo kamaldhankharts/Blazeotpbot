@@ -43,9 +43,9 @@ async def send_to_telegram(sms):
     bot = Bot(token=os.getenv("BOT_TOKEN"))
     message = (
     "📨 *New SMS Received*\n\n"
-    f"🕒 *Timestamp*: {sms['timestamp']}\n"
-    f"📞 *Number*: `{sms['number']}`\n"
-    f"💬 *Message*: {sms['message']}\n"
+    f"📞 *Number*: `+{sms['number']}`\n\n"
+    f"💬 *Message*: {sms['message']}\n\n"
+    f"🕒 *Time*: {sms['timestamp']}\n"
     )
 
 
