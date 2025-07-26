@@ -114,8 +114,8 @@ def payload_3(session):
         token_match = re.search(r'<meta name="csrf-token" content="([^"]+)"', response.text)
         if not token_match:
             logger.warning("No CSRF token found in /sms/received response")
-            return {"response": response, "csrf_token": ""}
-        return {"response": response, "csrf_token": token_match.group(1)}
+            return ""
+        return response, token_match.group(1)
     except Exception as e:
         logger.error(f"Payload 3 failed: {str(e)}")
         raise
@@ -139,11 +139,11 @@ def payload_4(session, csrf_token, from_date, to_date):
         "Content-Disposition: form-data; name=\"from\"\r\n"
         "\r\n"
         f"{from_date}\r\n"
-        "------WebKitFormBoundaryhkp0qMozYkZV6Ham\r\n"
+        f"------WebKitFormBoundaryhkp0qMozYkZV6Ham\r\n"
         "Content-Disposition: form-data; name=\"to\"\r\n"
         "\r\n"
         f"{to_date}\r\n"
-        "------WebKitFormBoundaryhkp0qMozYkZV6Ham\r\n"
+        f"------WebKitFormBoundaryhkp0qMozYkZV6Ham\r\n"
         "Content-Disposition: form-data; name=\"_token\"\r\n"
         "\r\n"
         f"{csrf_token}\r\n"
@@ -153,7 +153,7 @@ def payload_4(session, csrf_token, from_date, to_date):
     try:
         response = session.post(url, headers=headers, data=data, timeout=30)
         response.raise_for_status()
-        return response.text
+        return response
     except Exception as e:
         logger.error(f"Payload 4 failed: {str(e)}")
         raise
@@ -169,7 +169,7 @@ def parse_statistics(response_text):
         if no_sms and "You do not have any SMS" in no_sms.text:
             logger.info("No SMS data found in response")
             return ranges
-        logger.info("Parsing range cards")
+        
         # Find all range cards
         range_cards = soup.find_all('div', class_='card card-body mb-1 pointer')
         for card in range_cards:
@@ -190,14 +190,13 @@ def parse_statistics(response_text):
                     revenue = float(revenue_text) if revenue_text else 0.0
                 except ValueError as e:
                     logger.warning(f"Error parsing values for {range_name}: {str(e)}")
-                    count, paid, unpaid = 0, 0, =0
-                    revenue = 0.0
+                    count, paid, unpaid, revenue = 0, 0, 0, 0.0
                 
                 # Extract range_id from onclick
-                onclick = card.get('onclick', '' '')
-                
+                onclick = card.get('onclick', '')
                 range_id_match = re.search(r"getDetials\('([^']+)'\)", onclick)
                 range_id = range_id_match.group(1) if range_id_match else range_name
+                
                 ranges.append({
                     "range_name": range_name,
                     "range_id": range_id,
@@ -206,7 +205,6 @@ def parse_statistics(response_text):
                     "unpaid": unpaid,
                     "revenue": revenue
                 })
-        logger.info(f"Parsed {len(ranges)} ranges")
         return ranges
     except Exception as e:
         logger.error(f"Parse statistics failed: {str(e)}")
@@ -256,7 +254,7 @@ def payload_5(session, csrf_token, to_date, range_name):
     try:
         response = session.post(url, headers=headers, data=data, timeout=30)
         response.raise_for_status()
-        return response.text
+        return response
     except Exception as e:
         logger.error(f"Payload 5 failed: {str(e)}")
         raise
@@ -276,7 +274,6 @@ def parse_numbers(response_text):
                 numbers.append({"number": number, "number_id": number_id})
             else:
                 logger.warning(f"Failed to parse onclick: {onclick}")
-        logger.info(f"Parsed {len(numbers)} numbers")
         return numbers
     except Exception as e:
         logger.error(f"Parse numbers failed: {str(e)}")
@@ -307,7 +304,7 @@ def payload_6(session, csrf_token, to_date, number, range_name):
     try:
         response = session.post(url, headers=headers, data=data, timeout=30)
         response.raise_for_status()
-        return response.text
+        return response
     except Exception as e:
         logger.error(f"Payload 6 failed: {str(e)}")
         raise
@@ -321,7 +318,6 @@ def parse_message(response_text):
         
         message = message_div.find('p').text.strip() if message_div else "No message found"
         revenue = revenue_div.find('span', class_='currency_cdr').text.strip() if revenue_div else "0.0"
-        logger.info(f"Parsed message: {message[:50]}...")
         return {"message": message, "revenue": revenue}
     except Exception as e:
         logger.error(f"Parse message failed: {str(e)}")
@@ -350,7 +346,6 @@ async def main():
         today = datetime.now()
         from_date = today.strftime("%m/%d/%Y")
         to_date = (today + timedelta(days=1)).strftime("%m/%d/%Y")
-        logger.info(f"Date range: {from_date} to {to_date}")
         
         # Initialize in-memory storage
         JSON_FILE = "sms_statistics.json"
@@ -358,29 +353,33 @@ async def main():
         existing_ranges_dict = {r["range_name"]: r for r in existing_ranges}
         logger.info("Initialized storage")
         
+        # Track last re-authentication time to prevent rapid loops
+        last_reauth_time = 0
+        min_reauth_interval = 60  # Minimum seconds between re-authentication attempts
+        
         while True:
-            # Set session start time at the beginning of each session
-            session_start = time.time()
-            logger.info(f"New session started at {session_start}")
-            
             try:
                 with requests.Session() as session:
+                    # Initialize session start time
+                    session_start = time.time()
+                    
                     # Step 1: Login
                     logger.info("Executing Payload 1: GET /login")
                     tokens = payload_1(session)
                     
                     logger.info("Executing Payload 2: POST /login")
-                    payload_2(session, tokens["_token"])
+                    response = payload_2(session, tokens["_token"])
+                    logger.debug(f"Payload 2 response status: {response.status_code}, URL: {response.url}")
                     
                     logger.info("Executing Payload 3: GET /sms/received")
-                    payload_3_result = payload_3(session)
-                    response = payload_3_result["response"]
-                    csrf_token = payload_3_result["csrf_token"]
+                    response, csrf_token = payload_3(session)
+                    logger.debug(f"Payload 3 response status: {response.status_code}")
                     
                     # Step 2: Fetch initial statistics
-                    logger.info(f"Executing Payload 4: POST /sms/received/getsms")
-                    response_text = payload_4(session, csrf_token, from_date, to_date)
-                    ranges = parse_statistics(response_text)
+                    logger.info(f"Executing Payload 4: POST /sms/received/getsms for date range {from_date} to {to_date}")
+                    response = payload_4(session, csrf_token, from_date, to_date)
+                    logger.debug(f"Payload 4 response status: {response.status_code}")
+                    ranges = parse_statistics(response.text)
                     
                     # Save initial statistics if empty
                     if not existing_ranges:
@@ -390,17 +389,35 @@ async def main():
                     
                     # Step 3: Continuous monitoring
                     while True:
-                        # Check session expiry
+                        # Check session validity before expiry check
+                        try:
+                            test_response = session.get("https://www.ivasms.com/portal", headers=BASE_HEADERS, timeout=10)
+                            if test_response.status_code == 401 or test_response.url.endswith("/login"):
+                                logger.info("Session invalid. Re-authenticating...")
+                                last_reauth_time = time.time()
+                                break
+                        except Exception as e:
+                            logger.warning(f"Session validation check failed: {str(e)}")
+                            last_reauth_time = time.time()
+                            break
+                        
+                        # Check for session expiry (2 hours)
                         elapsed_time = time.time() - session_start
                         logger.debug(f"Session elapsed time: {elapsed_time:.2f} seconds")
-                        if elapsed_time > 7200:  # 2 hours
-                            logger.info("Session expired. Re-authenticating...")
+                        if elapsed_time > 7200:
+                            logger.info("Session nearing expiry. Re-authenticating...")
+                            # Ensure minimum interval between re-authentications
+                            time_since_last_reauth = time.time() - last_reauth_time
+                            if time_since_last_reauth < min_reauth_interval:
+                                logger.info(f"Waiting {min_reauth_interval - time_since_last_reauth:.2f} seconds before re-authenticating")
+                                await asyncio.sleep(min_reauth_interval - time_since_last_reauth)
+                            last_reauth_time = time.time()
                             break
                         
                         # Fetch updated statistics
-                        logger.info("Fetching updated statistics")
-                        response_text = payload_4(session, csrf_token, from_date, to_date)
-                        new_ranges = parse_statistics(response_text)
+                        response = payload_4(session, csrf_token, from_date, to_date)
+                        logger.debug(f"Payload 4 response status: {response.status_code}")
+                        new_ranges = parse_statistics(response.text)
                         new_ranges_dict = {r["range_name"]: r for r in new_ranges}
                         
                         # Compare with existing ranges
@@ -411,13 +428,15 @@ async def main():
                             
                             if not existing_range:
                                 logger.info(f"New range detected: {range_name}")
-                                response_text = payload_5(session, csrf_token, to_date, range_name)
-                                numbers = parse_numbers(response_text)
+                                response = payload_5(session, csrf_token, to_date, range_name)
+                                logger.debug(f"Payload 5 response status: {response.status_code}")
+                                numbers = parse_numbers(response.text)
                                 if numbers:
                                     for number_data in numbers[::-1]:
                                         logger.info(f"Fetching message for number: {number_data['number']}")
-                                        response_text = payload_6(session, csrf_token, to_date, number_data["number"], range_name)
-                                        message_data = parse_message(response_text)
+                                        response = payload_6(session, csrf_token, to_date, number_data["number"], range_name)
+                                        logger.debug(f"Payload 6 response status vp6: {response.status_code}")
+                                        message_data = parse_message(response.text)
                                         
                                         sms = {
                                             "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
@@ -435,13 +454,15 @@ async def main():
                             elif current_count > existing_range["count"]:
                                 count_diff = current_count - existing_range["count"]
                                 logger.info(f"Count increased for {range_name}: {existing_range['count']} -> {current_count} (+{count_diff})")
-                                response_text = payload_5(session, csrf_token, to_date, range_name)
-                                numbers = parse_numbers(response_text)
+                                response = payload_5(session, csrf_token, to_date, range_name)
+                                logger.debug(f"Payload 5 response status: {response.status_code}")
+                                numbers = parse_numbers(response.text)
                                 if numbers:
                                     for number_data in numbers[-count_diff:][::-1]:
                                         logger.info(f"Fetching message for number: {number_data['number']}")
-                                        response_text = payload_6(session, csrf_token, to_date, number_data["number"], range_name)
-                                        message_data = parse_message(response_text)
+                                        response = payload_6(session, csrf_token, to_date, number_data["number"], range_name)
+                                        logger.debug(f"Payload 6 response status vp6: {response.status_code}")
+                                        message_data = parse_message(response.text)
                                         
                                         sms = {
                                             "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
@@ -471,12 +492,15 @@ async def main():
                         await asyncio.sleep(2 + (time.time() % 1))
                     
             except Exception as e:
-                logger.error(f"Error: {str(e)}. Retrying in 30 seconds...")
-                await asyncio.sleep(30)
+                logger.error(f"Error in main loop: {str(e)}. Response content: {getattr(e, 'response', 'No response')}")
+                # Implement exponential backoff
+                retry_delay = min(30 * 2 ** min(3, 1), 300)  # Cap at 300 seconds
+                logger.info(f"Retrying in {retry_delay} seconds...")
+                await asyncio.sleep(retry_delay)
     
     except Exception as e:
         logger.error(f"Main loop failed: {str(e)}")
         raise
-
+    
 if __name__ == "__main__":
     asyncio.run(main())
