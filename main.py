@@ -543,9 +543,7 @@ async def add_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 # Get numbers for the range
                 numbers = payload_13(session, termination_id, session.csrf_token)
                 number_list = [f"`+{num['Number']}`" for num in numbers]
-                message = f"Range `{range_name}` added successfully!\n\nNumbers:\n" + "\n".join(number_list[:10])
-                if len(number_list) > 10:
-                    message += f"\n... and {len(number_list) - 10} more numbers."
+                message = f"Range `{range_name}` added successfully!\n\nNumbers:\n" + "\n".join(number_list)
                 await send_to_telegram(update.effective_chat.id, message)
             else:
                 await update.message.reply_text(f"Failed to add range `{range_name}`: {response.get('message', 'Unknown error')}", parse_mode="Markdown")
@@ -812,4 +810,5 @@ async def main():
 if __name__ == "__main__":
 
     asyncio.run(main())
+
 
