@@ -1,4 +1,5 @@
 import os
+import json
 import logging
 import requests
 import re
@@ -7,16 +8,20 @@ import asyncio
 from datetime import datetime
 from telegram import Bot, Update
 from telegram.ext import Application, CommandHandler, ContextTypes, ConversationHandler, MessageHandler, filters
-from google.oauth2.credentials import Credentials
-from google_auth_oauthlib.flow import InstalledAppFlow
+from google.oauth2.service_account import Credentials
 from googleapiclient.discovery import build
 from googleapiclient.errors import HttpError
 from bs4 import BeautifulSoup
+from tenacity import retry, stop_after_attempt, wait_fixed
 
 # Set up logging
 logging.basicConfig(
     level=logging.INFO,
-    format='%(asctime)s - %(levelname)s - %(message)s'
+    format='%(asctime)s - %(levelname)s - %(message)s',
+    handlers=[
+        logging.FileHandler('bot.log'),
+        logging.StreamHandler()
+    ]
 )
 logger = logging.getLogger(__name__)
 
@@ -41,7 +46,7 @@ BASE_HEADERS = {
 
 # Google Sheets setup
 SCOPES = ['https://www.googleapis.com/auth/spreadsheets']
-SHEET_ID = os.getenv("SHEET_ID")
+SHEET_ID = "1wDmJeXmWA7BHSsap5LRcEy62pm_xvqqGI8G3Xfo22JQ"
 SHEETS = {
     "admins": "Admins",
     "approved_users": "ApprovedUsers",
@@ -53,17 +58,24 @@ SHEETS = {
 CONFIRM_DELETE, CANCEL = range(2)
 
 def get_sheets_service():
-    """Initialize Google Sheets API service."""
-    creds = None
-    if os.path.exists('token.json'):
-        creds = Credentials.from_authorized_user_file('token.json', SCOPES)
-    if not creds or not creds.valid:
-        flow = InstalledAppFlow.from_client_secrets_file(
-            os.getenv("GOOGLE_CREDENTIALS"), SCOPES)
-        creds = flow.run_local_server(port=0)
-        with open('token.json', 'w') as token:
-            token.write(creds.to_json())
-    return build('sheets', 'v4', credentials=creds)
+    """Initialize Google Sheets API service using service account."""
+    try:
+        credentials_json = os.getenv("GOOGLE_CREDENTIALS")
+        if not credentials_json:
+            raise ValueError("GOOGLE_CREDENTIALS environment variable not set")
+        
+        # Parse credentials as JSON string or file path
+        try:
+            credentials_info = json.loads(credentials_json)
+        except json.JSONDecodeError:
+            with open(credentials_json, 'r') as f:
+                credentials_info = json.load(f)
+        
+        credentials = Credentials.from_service_account_info(credentials_info, scopes=SCOPES)
+        return build('sheets', 'v4', credentials=credentials)
+    except Exception as e:
+        logger.error(f"Failed to initialize Google Sheets service: {str(e)}")
+        raise
 
 def initialize_sheets():
     """Initialize required sheets if they don't exist."""
@@ -81,34 +93,18 @@ def initialize_sheets():
                 logger.info(f"Created sheet: {sheet_name}")
                 
                 # Initialize headers
-                if sheet_name == SHEETS["admins"]:
-                    service.spreadsheets().values().update(
-                        spreadsheetId=SHEET_ID,
-                        range=f"{sheet_name}!A1",
-                        valueInputOption="RAW",
-                        body={"values": [["UserID"]]}
-                    ).execute()
-                elif sheet_name == SHEETS["approved_users"]:
-                    service.spreadsheets().values().update(
-                        spreadsheetId=SHEET_ID,
-                        range=f"{sheet_name}!A1",
-                        valueInputOption="RAW",
-                        body={"values": [["UserID"]]}
-                    ).execute()
-                elif sheet_name == SHEETS["banned_users"]:
-                    service.spreadsheets().values().update(
-                        spreadsheetId=SHEET_ID,
-                        range=f"{sheet_name}!A1",
-                        valueInputOption="RAW",
-                        body={"values": [["UserID"]]}
-                    ).execute()
-                elif sheet_name == SHEETS["range_assignments"]:
-                    service.spreadsheets().values().update(
-                        spreadsheetId=SHEET_ID,
-                        range=f"{sheet_name}!A1",
-                        valueInputOption="RAW",
-                        body={"values": [["UserID", "RangeName", "TerminationID", "AddedAt"]]}
-                    ).execute()
+                headers = {
+                    SHEETS["admins"]: [["UserID"]],
+                    SHEETS["approved_users"]: [["UserID"]],
+                    SHEETS["banned_users"]: [["UserID"]],
+                    SHEETS["range_assignments"]: [["UserID", "RangeName", "TerminationID", "AddedAt"]]
+                }
+                service.spreadsheets().values().update(
+                    spreadsheetId=SHEET_ID,
+                    range=f"{sheet_name}!A1",
+                    valueInputOption="RAW",
+                    body={"values": headers[sheet_name]}
+                ).execute()
     except HttpError as e:
         logger.error(f"Failed to initialize sheets: {str(e)}")
         raise
@@ -165,6 +161,7 @@ def update_range_assignment(user_id, range_name, termination_id):
         logger.error(f"Failed to update range assignment: {str(e)}")
         raise
 
+@retry(stop=stop_after_attempt(3), wait=wait_fixed(2))
 def payload_1(session):
     """Send GET request to /login to retrieve initial tokens."""
     url = "https://www.ivasms.com/login"
@@ -180,6 +177,7 @@ def payload_1(session):
         logger.error(f"Payload 1 failed: {str(e)}")
         raise
 
+@retry(stop=stop_after_attempt(3), wait=wait_fixed(2))
 def payload_2(session, _token):
     """Send POST request to /login with credentials."""
     url = "https://www.ivasms.com/login"
@@ -209,6 +207,7 @@ def payload_2(session, _token):
         logger.error(f"Payload 2 failed: {str(e)}")
         raise
 
+@retry(stop=stop_after_attempt(3), wait=wait_fixed(2))
 def payload_10(session, range_name):
     """Search for a range to get termination ID."""
     url = f"https://www.ivasms.com/portal/numbers/test?draw=2&columns%5B0%5D%5Bdata%5D=range&columns%5B1%5D%5Bdata%5D=test_number&columns%5B2%5D%5Bdata%5D=term&columns%5B3%5D%5Bdata%5D=P2P&columns%5B4%5D%5Bdata%5D=A2P&columns%5B5%5D%5Bdata%5D=Limit_Range&columns%5B6%5D%5Bdata%5D=limit_cli_a2p&columns%5B7%5D%5Bdata%5D=limit_did_a2p&columns%5B8%5D%5Bdata%5D=limit_cli_did_a2p&columns%5B9%5D%5Bdata%5D=limit_cli_p2p&columns%5B10%5D%5Bdata%5D=limit_did_p2p&columns%5B11%5D%5Bdata%5D=limit_cli_did_p2p&columns%5B12%5D%5Bdata%5D=updated_at&columns%5B13%5D%5Bdata%5D=action&columns%5B13%5D%5Bsearchable%5D=false&columns%5B13%5D%5Borderable%5D=false&order%5B0%5D%5Bcolumn%5D=1&order%5B0%5D%5Bdir%5D=desc&start=0&length=50&search%5Bvalue%5D={urllib.parse.quote(range_name)}&_=1754468451369"
@@ -230,6 +229,7 @@ def payload_10(session, range_name):
         logger.error(f"Payload 10 failed: {str(e)}")
         raise
 
+@retry(stop=stop_after_attempt(3), wait=wait_fixed(2))
 def payload_11(session, termination_id, csrf_token):
     """Get termination details."""
     url = "https://www.ivasms.com/portal/numbers/termination/details"
@@ -255,6 +255,7 @@ def payload_11(session, termination_id, csrf_token):
         logger.error(f"Payload 11 failed: {str(e)}")
         raise
 
+@retry(stop=stop_after_attempt(3), wait=wait_fixed(2))
 def payload_12(session, termination_id, csrf_token):
     """Add number to termination."""
     url = "https://www.ivasms.com/portal/numbers/termination/number/add"
@@ -280,6 +281,7 @@ def payload_12(session, termination_id, csrf_token):
         logger.error(f"Payload 12 failed: {str(e)}")
         raise
 
+@retry(stop=stop_after_attempt(3), wait=wait_fixed(2))
 def payload_13(session, termination_id, csrf_token):
     """Get numbers for a range."""
     url = "https://www.ivasms.com/portal/live/getNumbers"
@@ -304,6 +306,7 @@ def payload_13(session, termination_id, csrf_token):
         logger.error(f"Payload 13 failed: {str(e)}")
         raise
 
+@retry(stop=stop_after_attempt(3), wait=wait_fixed(2))
 def payload_numbers(session):
     """Retrieve active ranges and total number of numbers from /portal/numbers."""
     url = "https://www.ivasms.com/portal/numbers"
@@ -334,6 +337,7 @@ def payload_numbers(session):
         logger.error(f"Payload numbers failed: {str(e)}")
         raise
 
+@retry(stop=stop_after_attempt(3), wait=wait_fixed(2))
 def payload_search_numbers(session, range_name):
     """Search for numbers in a specific range."""
     url = f"https://www.ivasms.com/portal/numbers?draw=1&columns%5B0%5D%5Bdata%5D=number_id&columns%5B0%5D%5Bname%5D=id&columns%5B0%5D%5Borderable%5D=false&columns%5B1%5D%5Bdata%5D=Number&columns%5B2%5D%5Bdata%5D=range&columns%5B3%5D%5Bdata%5D=A2P&columns%5B4%5D%5Bdata%5D=P2P&columns%5B5%5D%5Bdata%5D=LimitA2P&columns%5B6%5D%5Bdata%5D=limit_cli_a2p&columns%5B7%5D%5Bdata%5D=limit_did_a2p&columns%5B8%5D%5Bdata%5D=limit_cli_did_a2p&columns%5B9%5D%5Bdata%5D=LimitP2P&columns%5B10%5D%5Bdata%5D=limit_cli_p2p&columns%5B11%5D%5Bdata%5D=limit_did_p2p&columns%5B12%5D%5Bdata%5D=limit_cli_did_p2p&columns%5B13%5D%5Bdata%5D=action&columns%5B13%5D%5Bsearchable%5D=false&columns%5B13%5D%5Borderable%5D=false&order%5B0%5D%5Bcolumn%5D=1&order%5B0%5D%5Bdir%5D=desc&start=0&length=100&search%5Bvalue%5D={urllib.parse.quote(range_name)}&_=1754654048583"
@@ -363,6 +367,7 @@ def payload_search_numbers(session, range_name):
         logger.error(f"Payload search numbers failed: {str(e)}")
         raise
 
+@retry(stop=stop_after_attempt(3), wait=wait_fixed(2))
 def payload_delete_numbers(session, number_ids):
     """Delete multiple numbers from a range using bulk delete."""
     url = "https://www.ivasms.com/portal/numbers/return/number/bluck"
@@ -386,6 +391,7 @@ def payload_delete_numbers(session, number_ids):
         logger.error(f"Payload delete numbers failed: {str(e)}")
         raise
 
+@retry(stop=stop_after_attempt(3), wait=wait_fixed(2))
 def payload_delete_all(session):
     """Delete all numbers in the panel."""
     url = "https://www.ivasms.com/portal/numbers/return/allnumber/bluck"
@@ -443,6 +449,26 @@ async def check_user_permissions(update: Update, context: ContextTypes.DEFAULT_T
         await update.message.reply_text("You are not an approved user. Please contact an admin.")
         return False
     return True
+
+async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handle /start command to display bot usage."""
+    user_id = str(update.effective_user.id)
+    admins = get_user_data(SHEETS["admins"])
+    is_admin = user_id in admins
+    message = (
+        "Welcome to the IVASMS Bot!\n\n"
+        "Available commands:\n"
+        "- `/add <range_name>`: Add a new range to the panel.\n"
+        "- `/delete <range_name>`: Delete a range from the panel.\n"
+        "- `/view <range_name>`: View numbers in a specific range.\n"
+    )
+    if is_admin:
+        message += (
+            "- `/deleteall`: Delete all ranges from the panel (admin only).\n"
+            "- `/active`: List all active ranges in the panel (admin only).\n"
+        )
+    message += "\nYou must be an approved user to use this bot. Contact an admin to get approved."
+    await update.message.reply_text(message, parse_mode="Markdown")
 
 async def add_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Handle /add <range_name> command with confirmation for existing range."""
@@ -645,7 +671,9 @@ async def view_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 return
 
             number_list = [f"`+{num['number']}`" for num in search_result["numbers"]]
-            message = f"Numbers in range `{range_name}` ({search_result['total']}):\n" + "\n".join(number_list)
+            message = f"Numbers in range `{range_name}` ({search_result['total']}):\n" + "\n".join(number_list[:10])  # Limit to 10 numbers to avoid message length issues
+            if search_result["total"] > 10:
+                message += f"\n... and {search_result['total'] - 10} more numbers."
             await send_to_telegram(update.effective_chat.id, message)
     except Exception as e:
         logger.error(f"View command failed: {str(e)}")
@@ -751,6 +779,7 @@ async def main():
             },
             fallbacks=[CommandHandler("cancel", cancel)]
         )
+        application.add_handler(CommandHandler("start", start_command))
         application.add_handler(conv_handler)
         application.add_handler(CommandHandler("delete", delete_command))
         application.add_handler(CommandHandler("deleteall", delete_all_command))
