@@ -685,9 +685,7 @@ async def view_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 return
 
             number_list = [f"`+{num['number']}`" for num in search_result["numbers"]]
-            message = f"Numbers in range `{range_name}` ({search_result['total']}):\n" + "\n".join(number_list[:10])
-            if search_result["total"] > 10:
-                message += f"\n... and {search_result['total'] - 10} more numbers."
+            message = f"Numbers in range `{range_name}` ({search_result['total']}):\n" + "\n".join(number_list[])
             await send_to_telegram(update.effective_chat.id, message)
     except Exception as e:
         logger.error(f"View command failed: {str(e)}")
@@ -812,4 +810,5 @@ async def main():
         raise
 
 if __name__ == "__main__":
+
     asyncio.run(main())
