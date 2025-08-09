@@ -81,14 +81,25 @@ def initialize_sheets():
     """Initialize required sheets if they don't exist."""
     service = get_sheets_service()
     try:
+        # Get existing sheets
         spreadsheet = service.spreadsheets().get(spreadsheetId=SHEET_ID).execute()
         existing_sheets = [sheet['properties']['title'] for sheet in spreadsheet['sheets']]
         
+        # Create missing sheets using batchUpdate
         for sheet_name in SHEETS.values():
             if sheet_name not in existing_sheets:
-                service.spreadsheets().sheets().create(
+                batch_update_request = {
+                    "requests": [{
+                        "addSheet": {
+                            "properties": {
+                                "title": sheet_name
+                            }
+                        }
+                    }]
+                }
+                service.spreadsheets().batchUpdate(
                     spreadsheetId=SHEET_ID,
-                    body={"properties": {"title": sheet_name}}
+                    body=batch_update_request
                 ).execute()
                 logger.info(f"Created sheet: {sheet_name}")
                 
@@ -105,6 +116,7 @@ def initialize_sheets():
                     valueInputOption="RAW",
                     body={"values": headers[sheet_name]}
                 ).execute()
+                logger.info(f"Initialized headers for sheet: {sheet_name}")
     except HttpError as e:
         logger.error(f"Failed to initialize sheets: {str(e)}")
         raise
@@ -531,7 +543,9 @@ async def add_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 # Get numbers for the range
                 numbers = payload_13(session, termination_id, session.csrf_token)
                 number_list = [f"`+{num['Number']}`" for num in numbers]
-                message = f"Range `{range_name}` added successfully!\n\nNumbers:\n" + "\n".join(number_list)
+                message = f"Range `{range_name}` added successfully!\n\nNumbers:\n" + "\n".join(number_list[:10])
+                if len(number_list) > 10:
+                    message += f"\n... and {len(number_list) - 10} more numbers."
                 await send_to_telegram(update.effective_chat.id, message)
             else:
                 await update.message.reply_text(f"Failed to add range `{range_name}`: {response.get('message', 'Unknown error')}", parse_mode="Markdown")
@@ -671,7 +685,7 @@ async def view_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 return
 
             number_list = [f"`+{num['number']}`" for num in search_result["numbers"]]
-            message = f"Numbers in range `{range_name}` ({search_result['total']}):\n" + "\n".join(number_list[:10])  # Limit to 10 numbers to avoid message length issues
+            message = f"Numbers in range `{range_name}` ({search_result['total']}):\n" + "\n".join(number_list[:10])
             if search_result["total"] > 10:
                 message += f"\n... and {search_result['total'] - 10} more numbers."
             await send_to_telegram(update.effective_chat.id, message)
