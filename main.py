@@ -320,8 +320,8 @@ def payload_13(session, termination_id, csrf_token):
 
 @retry(stop=stop_after_attempt(3), wait=wait_fixed(2))
 def payload_numbers(session):
-    """Retrieve active ranges and total number of numbers from /portal/numbers."""
-    url = "https://www.ivasms.com/portal/numbers"
+    """Retrieve active ranges and total number of numbers from /portal/live/my_sms."""
+    url = "https://www.ivasms.com/portal/live/my_sms"
     headers = BASE_HEADERS.copy()
     try:
         response = session.get(url, headers=headers, timeout=30)
@@ -331,10 +331,10 @@ def payload_numbers(session):
         soup = BeautifulSoup(response.text, 'html.parser')
         
         # Extract total number of active numbers
-        total_numbers_match = soup.find('h6', class_='mb-0')
-        total_numbers = int(re.search(r'\((\d+)\)', total_numbers_match.text).group(1)) if total_numbers_match else 0
+        total_numbers_element = soup.find('h6', class_='mb-0')
+        total_numbers = int(re.search(r'\((\d+)\)', total_numbers_element.text).group(1)) if total_numbers_element else 0
         
-        # Extract ranges and termination IDs
+        # Extract ranges and termination IDs from accordion
         ranges = []
         for card in soup.find_all('div', class_='card card-secondary'):
             range_link = card.find('a', class_='d-block w-100')
@@ -348,6 +348,7 @@ def payload_numbers(session):
     except Exception as e:
         logger.error(f"Payload numbers failed: {str(e)}")
         raise
+
 
 @retry(stop=stop_after_attempt(3), wait=wait_fixed(2))
 def payload_search_numbers(session, range_name):
@@ -713,6 +714,7 @@ async def active_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 await update.message.reply_text("No active ranges found in the panel.", parse_mode="Markdown")
                 return
 
+            # Format ranges in copiable format, one per line
             range_list = [f"`{r['range_name']}` (ID: `{r['termination_id']}`)" for r in numbers_data["ranges"]]
             message = f"Active ranges ({numbers_data['total_numbers']} numbers):\n" + "\n".join(range_list)
             await send_to_telegram(update.effective_chat.id, message)
@@ -720,6 +722,7 @@ async def active_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         logger.error(f"Active command failed: {str(e)}")
         await update.message.reply_text(f"Error retrieving active ranges: {str(e)}", parse_mode="Markdown")
 
+        
 async def confirm_delete(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Handle /confirm_delete to delete existing range and add new one."""
     user_id = str(update.effective_user.id)
