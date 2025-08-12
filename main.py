@@ -13,11 +13,7 @@ from googleapiclient.discovery import build
 from googleapiclient.errors import HttpError
 from bs4 import BeautifulSoup
 from tenacity import retry, stop_after_attempt, wait_fixed
-from dotenv import load_dotenv
-import pytz
 
-# Load environment variables from .env file for local development
-load_dotenv()
 
 # Set up logging
 logging.basicConfig(
