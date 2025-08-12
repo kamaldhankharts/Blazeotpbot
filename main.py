@@ -15,6 +15,7 @@ from googleapiclient.errors import HttpError
 from bs4 import BeautifulSoup
 from tenacity import retry, stop_after_attempt, wait_fixed
 
+
 # Set up logging
 logging.basicConfig(
     level=logging.INFO,
@@ -689,6 +690,9 @@ async def check_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
             session.csrf_token = tokens["_token"]
 
             response = payload_check(session)
+            with open("check_response.json", "w", encoding="utf-8") as f:
+                json.dump(response, f, ensure_ascii=False, indent=2)
+
             ranges = parse_ranges(response)
             if not ranges:
                 await update.message.reply_text("No active ranges found in the panel.")
