@@ -13,6 +13,10 @@ from googleapiclient.discovery import build
 from googleapiclient.errors import HttpError
 from bs4 import BeautifulSoup
 from tenacity import retry, stop_after_attempt, wait_fixed
+from dotenv import load_dotenv
+
+# Load environment variables from .env file for local development
+load_dotenv()
 
 # Set up logging
 logging.basicConfig(
@@ -184,6 +188,7 @@ def payload_1(session):
         token_match = re.search(r'<input type="hidden" name="_token" value="([^"]+)"', response.text)
         if not token_match:
             raise ValueError("Could not find _token in response")
+        session.csrf_token = token_match.group(1)  # Set CSRF token on session
         return {"_token": token_match.group(1)}
     except Exception as e:
         logger.error(f"Payload 1 failed: {str(e)}")
@@ -222,6 +227,8 @@ def payload_2(session, _token):
 @retry(stop=stop_after_attempt(3), wait=wait_fixed(2))
 def payload_10(session, range_name):
     """Search for a range to get termination ID."""
+    if not hasattr(session, 'csrf_token'):
+        raise AttributeError("Session missing csrf_token. Ensure login is completed.")
     url = f"https://www.ivasms.com/portal/numbers/test?draw=2&columns%5B0%5D%5Bdata%5D=range&columns%5B1%5D%5Bdata%5D=test_number&columns%5B2%5D%5Bdata%5D=term&columns%5B3%5D%5Bdata%5D=P2P&columns%5B4%5D%5Bdata%5D=A2P&columns%5B5%5D%5Bdata%5D=Limit_Range&columns%5B6%5D%5Bdata%5D=limit_cli_a2p&columns%5B7%5D%5Bdata%5D=limit_did_a2p&columns%5B8%5D%5Bdata%5D=limit_cli_did_a2p&columns%5B9%5D%5Bdata%5D=limit_cli_p2p&columns%5B10%5D%5Bdata%5D=limit_did_p2p&columns%5B11%5D%5Bdata%5D=limit_cli_did_p2p&columns%5B12%5D%5Bdata%5D=updated_at&columns%5B13%5D%5Bdata%5D=action&columns%5B13%5D%5Bsearchable%5D=false&columns%5B13%5D%5Borderable%5D=false&order%5B0%5D%5Bcolumn%5D=1&order%5B0%5D%5Bdir%5D=desc&start=0&length=50&search%5Bvalue%5D={urllib.parse.quote(range_name)}&_=1754468451369"
     headers = BASE_HEADERS.copy()
     headers.update({
@@ -321,8 +328,15 @@ def payload_13(session, termination_id, csrf_token):
 @retry(stop=stop_after_attempt(3), wait=wait_fixed(2))
 def payload_numbers(session):
     """Retrieve active ranges and total number of numbers from /portal/live/my_sms."""
+    if not hasattr(session, 'csrf_token'):
+        raise AttributeError("Session missing csrf_token. Ensure login is completed.")
     url = "https://www.ivasms.com/portal/live/my_sms"
     headers = BASE_HEADERS.copy()
+    headers.update({
+        "X-Csrf-Token": session.csrf_token,
+        "X-Requested-With": "XMLHttpRequest",
+        "Accept": "text/html, */*; q=0.01",
+    })
     try:
         response = session.get(url, headers=headers, timeout=30)
         response.raise_for_status()
@@ -349,10 +363,11 @@ def payload_numbers(session):
         logger.error(f"Payload numbers failed: {str(e)}")
         raise
 
-
 @retry(stop=stop_after_attempt(3), wait=wait_fixed(2))
 def payload_search_numbers(session, range_name):
     """Search for numbers in a specific range."""
+    if not hasattr(session, 'csrf_token'):
+        raise AttributeError("Session missing csrf_token. Ensure login is completed.")
     url = f"https://www.ivasms.com/portal/numbers?draw=1&columns%5B0%5D%5Bdata%5D=number_id&columns%5B0%5D%5Bname%5D=id&columns%5B0%5D%5Borderable%5D=false&columns%5B1%5D%5Bdata%5D=Number&columns%5B2%5D%5Bdata%5D=range&columns%5B3%5D%5Bdata%5D=A2P&columns%5B4%5D%5Bdata%5D=P2P&columns%5B5%5D%5Bdata%5D=LimitA2P&columns%5B6%5D%5Bdata%5D=limit_cli_a2p&columns%5B7%5D%5Bdata%5D=limit_did_a2p&columns%5B8%5D%5Bdata%5D=limit_cli_did_a2p&columns%5B9%5D%5Bdata%5D=LimitP2P&columns%5B10%5D%5Bdata%5D=limit_cli_p2p&columns%5B11%5D%5Bdata%5D=limit_did_p2p&columns%5B12%5D%5Bdata%5D=limit_cli_did_p2p&columns%5B13%5D%5Bdata%5D=action&columns%5B13%5D%5Bsearchable%5D=false&columns%5B13%5D%5Borderable%5D=false&order%5B0%5D%5Bcolumn%5D=1&order%5B0%5D%5Bdir%5D=desc&start=0&length=100&search%5Bvalue%5D={urllib.parse.quote(range_name)}&_=1754654048583"
     headers = BASE_HEADERS.copy()
     headers.update({
@@ -383,6 +398,8 @@ def payload_search_numbers(session, range_name):
 @retry(stop=stop_after_attempt(3), wait=wait_fixed(2))
 def payload_delete_numbers(session, number_ids):
     """Delete multiple numbers from a range using bulk delete."""
+    if not hasattr(session, 'csrf_token'):
+        raise AttributeError("Session missing csrf_token. Ensure login is completed.")
     url = "https://www.ivasms.com/portal/numbers/return/number/bluck"
     headers = BASE_HEADERS.copy()
     headers.update({
@@ -404,9 +421,11 @@ def payload_delete_numbers(session, number_ids):
         logger.error(f"Payload delete numbers failed: {str(e)}")
         raise
 
-@retry(stop=stop_after_attempt(3), wait=wait_fixed(2))
+@retry(stop=stop_after_attempt(3), wait=stop_after_attempt(2))
 def payload_delete_all(session):
     """Delete all numbers in the panel."""
+    if not hasattr(session, 'csrf_token'):
+        raise AttributeError("Session missing csrf_token. Ensure login is completed.")
     url = "https://www.ivasms.com/portal/numbers/return/allnumber/bluck"
     headers = BASE_HEADERS.copy()
     headers.update({
@@ -513,7 +532,6 @@ async def add_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
             # Login
             tokens = payload_1(session)
             payload_2(session, tokens["_token"])
-            session.csrf_token = tokens["_token"]
 
             # Check total numbers in panel
             numbers_data = payload_numbers(session)
@@ -581,7 +599,6 @@ async def delete_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
             # Login
             tokens = payload_1(session)
             payload_2(session, tokens["_token"])
-            session.csrf_token = tokens["_token"]
 
             # Search for numbers in the range
             search_result = payload_search_numbers(session, range_name)
@@ -628,7 +645,6 @@ async def delete_all_command(update: Update, context: ContextTypes.DEFAULT_TYPE)
             # Login
             tokens = payload_1(session)
             payload_2(session, tokens["_token"])
-            session.csrf_token = tokens["_token"]
 
             # Delete all numbers
             response = payload_delete_all(session)
@@ -675,7 +691,6 @@ async def view_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
             # Login
             tokens = payload_1(session)
             payload_2(session, tokens["_token"])
-            session.csrf_token = tokens["_token"]
 
             # Search for numbers in the range
             search_result = payload_search_numbers(session, range_name)
@@ -706,7 +721,6 @@ async def active_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
             # Login
             tokens = payload_1(session)
             payload_2(session, tokens["_token"])
-            session.csrf_token = tokens["_token"]
 
             # Get active ranges
             numbers_data = payload_numbers(session)
@@ -722,7 +736,6 @@ async def active_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         logger.error(f"Active command failed: {str(e)}")
         await update.message.reply_text(f"Error retrieving active ranges: {str(e)}", parse_mode="Markdown")
 
-        
 async def confirm_delete(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Handle /confirm_delete to delete existing range and add new one."""
     user_id = str(update.effective_user.id)
@@ -744,7 +757,6 @@ async def confirm_delete(update: Update, context: ContextTypes.DEFAULT_TYPE):
             # Login
             tokens = payload_1(session)
             payload_2(session, tokens["_token"])
-            session.csrf_token = tokens["_token"]
 
             # Delete existing range
             search_result = payload_search_numbers(session, user_assignment["range_name"])
@@ -811,6 +823,4 @@ async def main():
         raise
 
 if __name__ == "__main__":
-
     asyncio.run(main())
-
