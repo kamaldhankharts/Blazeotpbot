@@ -1,7 +1,6 @@
 import os
 import json
 import logging
-import time
 import requests
 import re
 import urllib.parse
@@ -14,7 +13,6 @@ from googleapiclient.discovery import build
 from googleapiclient.errors import HttpError
 from bs4 import BeautifulSoup
 from tenacity import retry, stop_after_attempt, wait_fixed
-
 
 # Set up logging
 logging.basicConfig(
@@ -43,8 +41,7 @@ BASE_HEADERS = {
     "Sec-Fetch-User": "?1",
     "Sec-Fetch-Dest": "document",
     "Accept-Encoding": "gzip, deflate, br",
-    "Priority": "u=0, i",
-    "Connection": "keep-alive"
+    "Priority": "u=0, i"
 }
 
 # Google Sheets setup
@@ -221,10 +218,9 @@ def payload_1(session):
         token_match = re.search(r'<input type="hidden" name="_token" value="([^"]+)"', response.text)
         if not token_match:
             raise ValueError("Could not find _token in response")
-        logger.info(f"Extracted CSRF token: {token_match.group(1)}", extra={"user_id": "N/A"})
         return {"_token": token_match.group(1)}
     except Exception as e:
-        logger.error(f"Payload 1 failed: {str(e)}", exc_info=True, extra={"user_id": "N/A"})
+        logger.error(f"Payload 1 failed: {str(e)}", extra={"user_id": "N/A"})
         raise
 
 @retry(stop=stop_after_attempt(3), wait=wait_fixed(2))
@@ -250,54 +246,11 @@ def payload_2(session, _token):
     try:
         response = session.post(url, headers=headers, data=data, timeout=30)
         response.raise_for_status()
-        logger.info(f"Login response status: {response.status_code}, URL: {response.url}", extra={"user_id": "N/A"})
         if response.url.endswith("/login"):
             raise ValueError("Login failed, redirected back to /login")
         return response
     except Exception as e:
-        logger.error(f"Payload 2 failed: {str(e)}", exc_info=True, extra={"user_id": "N/A"})
-        raise
-
-@retry(stop=stop_after_attempt(3), wait=wait_fixed(2))
-def payload_check(session):
-    """Send GET request to /portal/sms/test/sms to get available ranges."""
-    url = f"https://www.ivasms.com/portal/sms/test/sms?draw=1&columns%5B0%5D%5Bdata%5D=range&columns%5B0%5D%5Borderable%5D=false&columns%5B1%5D%5Bdata%5D=termination.test_number&columns%5B1%5D%5Bsearchable%5D=false&columns%5B1%5D%5Borderable%5D=false&columns%5B2%5D%5Bdata%5D=originator&columns%5B2%5D%5Borderable%5D=false&columns%5B3%5D%5Bdata%5D=messagedata&columns%5B3%5D%5Borderable%5D=false&columns%5B4%5D%5Bdata%5D=senttime&columns%5B4%5D%5Bsearchable%5D=false&order%5B0%5D%5Bcolumn%5D=4&order%5B0%5D%5Bdir%5D=desc&start=0&length=25&search%5Bvalue%5D=&_={int(time.time() * 1000)}"
-    headers = BASE_HEADERS.copy()
-    headers.update({
-        "X-Requested-With": "XMLHttpRequest",
-        "Accept": "application/json, text/javascript, */*; q=0.01",
-        "Sec-Fetch-Site": "same-origin",
-        "Sec-Fetch-Mode": "cors",
-        "Sec-Fetch-Dest": "empty",
-        "Referer": "https://www.ivasms.com/portal/sms/test/sms"
-    })
-    
-    try:
-        response = session.get(url, headers=headers, timeout=30)
-        response.raise_for_status()
-        return response.json()
-    except Exception as e:
-        logger.error(f"Payload check failed: {str(e)}", exc_info=True, extra={"user_id": "N/A"})
-        raise
-
-@retry(stop=stop_after_attempt(3), wait=wait_fixed(2))
-def payload_active(session):
-    """Send GET request to /portal/live/my_sms to get active SMS data."""
-    url = "https://www.ivasms.com/portal/live/my_sms"
-    headers = BASE_HEADERS.copy()
-    headers.update({
-        "Sec-Fetch-Site": "same-origin",
-        "Sec-Fetch-Mode": "navigate",
-        "Sec-Fetch-Dest": "document",
-        "Referer": "https://www.ivasms.com/portal"
-    })
-    
-    try:
-        response = session.get(url, headers=headers, timeout=30)
-        response.raise_for_status()
-        return response
-    except Exception as e:
-        logger.error(f"Payload active failed: {str(e)}", exc_info=True, extra={"user_id": "N/A"})
+        logger.error(f"Payload 2 failed: {str(e)}", extra={"user_id": "N/A"})
         raise
 
 @retry(stop=stop_after_attempt(3), wait=wait_fixed(2))
@@ -319,7 +272,7 @@ def payload_10(session, range_name):
         response.raise_for_status()
         return response.json()
     except Exception as e:
-        logger.error(f"Payload 10 failed: {str(e)}", exc_info=True, extra={"user_id": "N/A"})
+        logger.error(f"Payload 10 failed: {str(e)}", extra={"user_id": "N/A"})
         raise
 
 @retry(stop=stop_after_attempt(3), wait=wait_fixed(2))
@@ -345,7 +298,7 @@ def payload_11(session, termination_id, csrf_token):
         response.raise_for_status()
         return response
     except Exception as e:
-        logger.error(f"Payload 11 failed: {str(e)}", exc_info=True, extra={"user_id": "N/A"})
+        logger.error(f"Payload 11 failed: {str(e)}", extra={"user_id": "N/A"})
         raise
 
 @retry(stop=stop_after_attempt(3), wait=wait_fixed(2))
@@ -371,7 +324,7 @@ def payload_12(session, termination_id, csrf_token):
         response.raise_for_status()
         return response.json()
     except Exception as e:
-        logger.error(f"Payload 12 failed: {str(e)}", exc_info=True, extra={"user_id": "N/A"})
+        logger.error(f"Payload 12 failed: {str(e)}", extra={"user_id": "N/A"})
         raise
 
 @retry(stop=stop_after_attempt(3), wait=wait_fixed(2))
@@ -396,7 +349,34 @@ def payload_13(session, termination_id, csrf_token):
         response.raise_for_status()
         return response.json()
     except Exception as e:
-        logger.error(f"Payload 13 failed: {str(e)}", exc_info=True, extra={"user_id": "N/A"})
+        logger.error(f"Payload 13 failed: {str(e)}", extra={"user_id": "N/A"})
+        raise
+
+@retry(stop=stop_after_attempt(3), wait=wait_fixed(2))
+def payload_numbers(session):
+    """Retrieve active ranges and total number of numbers from /portal/numbers."""
+    url = "https://www.ivasms.com/portal/numbers"
+    headers = BASE_HEADERS.copy()
+    try:
+        response = session.get(url, headers=headers, timeout=30)
+        response.raise_for_status()
+        
+        soup = BeautifulSoup(response.text, 'html.parser')
+        total_numbers_match = soup.find('h6', class_='mb-0')
+        total_numbers = int(re.search(r'\((\d+)\)', total_numbers_match.text).group(1)) if total_numbers_match else 0
+        
+        ranges = []
+        for card in soup.find_all('div', class_='card card-secondary'):
+            range_link = card.find('a', class_='d-block w-100')
+            if range_link:
+                range_name = range_link.text.strip()
+                termination_id = range_link.get('data-id', '')
+                if range_name and termination_id:
+                    ranges.append({"range_name": range_name, "termination_id": termination_id})
+        
+        return {"total_numbers": total_numbers, "ranges": ranges}
+    except Exception as e:
+        logger.error(f"Payload numbers failed: {str(e)}", extra={"user_id": "N/A"})
         raise
 
 @retry(stop=stop_after_attempt(3), wait=wait_fixed(2))
@@ -427,7 +407,7 @@ def payload_search_numbers(session, range_name):
         ]
         return {"total": data.get("recordsFiltered", 0), "numbers": numbers}
     except Exception as e:
-        logger.error(f"Payload search numbers failed: {str(e)}", exc_info=True, extra={"user_id": "N/A"})
+        logger.error(f"Payload search numbers failed: {str(e)}", extra={"user_id": "N/A"})
         raise
 
 @retry(stop=stop_after_attempt(3), wait=wait_fixed(2))
@@ -451,7 +431,7 @@ def payload_delete_numbers(session, number_ids):
         response.raise_for_status()
         return response.json()
     except Exception as e:
-        logger.error(f"Payload delete numbers failed: {str(e)}", exc_info=True, extra={"user_id": "N/A"})
+        logger.error(f"Payload delete numbers failed: {str(e)}", extra={"user_id": "N/A"})
         raise
 
 @retry(stop=stop_after_attempt(3), wait=wait_fixed(2))
@@ -474,7 +454,7 @@ def payload_delete_all(session):
         response.raise_for_status()
         return response.json()
     except Exception as e:
-        logger.error(f"Payload delete all failed: {str(e)}", exc_info=True, extra={"user_id": "N/A"})
+        logger.error(f"Payload delete all failed: {str(e)}", extra={"user_id": "N/A"})
         raise
 
 def parse_ranges(response_json):
@@ -488,38 +468,8 @@ def parse_ranges(response_json):
                 ranges.append({"range_name": range_name, "termination_id": str(termination_id)})
         return ranges
     except Exception as e:
-        logger.error(f"Parse ranges failed: {str(e)}", exc_info=True, extra={"user_id": "N/A"})
+        logger.error(f"Parse ranges failed: {str(e)}", extra={"user_id": "N/A"})
         return []
-
-def parse_active_data(response_text):
-    """Parse active SMS data from /portal/live/my_sms response."""
-    try:
-        soup = BeautifulSoup(response_text, 'html.parser')
-        active_data = {"ranges": [], "total_numbers": 0}
-        
-        # Extract ranges from accordion
-        accordion = soup.find('div', id='accordion')
-        if accordion:
-            range_cards = accordion.find_all('div', class_='card card-secondary')
-            for card in range_cards:
-                range_link = card.find('a', class_=re.compile(r'd-block w-100'))
-                if range_link:
-                    range_name = range_link.text.strip()
-                    termination_id = range_link.get('data-id', '')
-                    if range_name and termination_id:
-                        active_data["ranges"].append({"range_name": range_name, "termination_id": termination_id})
-        
-        # Extract total numbers
-        total_numbers_header = soup.find('h6', class_='mb-0', string=re.compile(r'My Numbers'))
-        if total_numbers_header:
-            total_numbers_match = re.search(r'\((\d+)\)', total_numbers_header.text)
-            if total_numbers_match:
-                active_data["total_numbers"] = int(total_numbers_match.group(1))
-        
-        return active_data
-    except Exception as e:
-        logger.error(f"Parse active data failed: {str(e)}", exc_info=True, extra={"user_id": "N/A"})
-        raise
 
 async def send_to_telegram(chat_id, message, user_id="N/A"):
     """Send message to Telegram with pagination."""
@@ -541,7 +491,7 @@ async def send_to_telegram(chat_id, message, user_id="N/A"):
             await asyncio.sleep(0.5)
         logger.info(f"Sent message to chat {chat_id}", extra={"user_id": user_id})
     except Exception as e:
-        logger.error(f"Failed to send to Telegram: {str(e)}", exc_info=True, extra={"user_id": user_id})
+        logger.error(f"Failed to send to Telegram: {str(e)}", extra={"user_id": user_id})
 
 async def check_user_permissions(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Check if user is authorized to use the bot."""
@@ -689,22 +639,18 @@ async def check_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
             payload_2(session, tokens["_token"])
             session.csrf_token = tokens["_token"]
 
-            response = payload_check(session)
-            with open("check_response.json", "w", encoding="utf-8") as f:
-                json.dump(response, f, ensure_ascii=False, indent=2)
-
-            ranges = parse_ranges(response)
-            if not ranges:
+            numbers_data = payload_numbers(session)
+            if not numbers_data["ranges"]:
                 await update.message.reply_text("No active ranges found in the panel.")
                 logger.info(f"User {user_id} checked active ranges: none found", extra={"user_id": user_id})
                 return
 
-            range_list = [f"`{r['range_name']}` (ID: `{r['termination_id']}`)" for r in ranges]
-            message = f"Active ranges ({len(ranges)} ranges):\n" + "\n".join(range_list)
+            range_list = [f"`{r['range_name']}` (ID: `{r['termination_id']}`)" for r in numbers_data["ranges"]]
+            message = f"Active ranges ({numbers_data['total_numbers']} numbers):\n" + "\n".join(range_list)
             await send_to_telegram(update.effective_chat.id, message, user_id)
             logger.info(f"User {user_id} checked active ranges", extra={"user_id": user_id})
     except Exception as e:
-        logger.error(f"Check command failed: {str(e)}", exc_info=True, extra={"user_id": user_id})
+        logger.error(f"Check command failed: {str(e)}", extra={"user_id": user_id})
         await update.message.reply_text(f"Error retrieving active ranges: {str(e)}")
 
 async def add_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -740,9 +686,8 @@ async def add_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
             payload_2(session, tokens["_token"])
             session.csrf_token = tokens["_token"]
 
-            response = payload_active(session)
-            active_data = parse_active_data(response.text)
-            if active_data["total_numbers"] >= 1000:
+            numbers_data = payload_numbers(session)
+            if numbers_data["total_numbers"] >= 1000:
                 await update.message.reply_text("Cannot add range: Panel has reached the 1000-number limit.")
                 logger.info(f"User {user_id} attempted to add range but panel is full", extra={"user_id": user_id})
                 return
@@ -771,7 +716,7 @@ async def add_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 await update.message.reply_text(f"Failed to add range `{range_name}`: {response.get('message', 'Unknown error')}")
                 logger.error(f"Failed to add range {range_name}: {response.get('message', 'Unknown error')}", extra={"user_id": user_id})
     except Exception as e:
-        logger.error(f"Add command failed: {str(e)}", exc_info=True, extra={"user_id": user_id})
+        logger.error(f"Add command failed: {str(e)}", extra={"user_id": user_id})
         await update.message.reply_text(f"Error adding range `{range_name}`: {str(e)}")
     return ConversationHandler.END
 
@@ -836,7 +781,7 @@ async def delete_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 await update.message.reply_text(f"Failed to delete range `{range_name}`: {response.get('message', 'Unknown error')}")
                 logger.error(f"Failed to delete range {range_name}: {response.get('message', 'Unknown error')}", extra={"user_id": user_id})
     except Exception as e:
-        logger.error(f"Delete command failed: {str(e)}", exc_info=True, extra={"user_id": user_id})
+        logger.error(f"Delete command failed: {str(e)}", extra={"user_id": user_id})
         await update.message.reply_text(f"Error deleting range `{range_name}`: {str(e)}")
 
 async def delete_all_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -868,7 +813,7 @@ async def delete_all_command(update: Update, context: ContextTypes.DEFAULT_TYPE)
                 await update.message.reply_text(f"Failed to delete all ranges: {response.get('message', 'Unknown error')}")
                 logger.error(f"Failed to delete all ranges: {response.get('message', 'Unknown error')}", extra={"user_id": user_id})
     except Exception as e:
-        logger.error(f"Delete all command failed: {str(e)}", exc_info=True, extra={"user_id": user_id})
+        logger.error(f"Delete all command failed: {str(e)}", extra={"user_id": user_id})
         await update.message.reply_text(f"Error deleting all ranges: {str(e)}")
 
 async def view_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -918,7 +863,7 @@ async def view_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await send_to_telegram(update.effective_chat.id, message, user_id)
             logger.info(f"User {user_id} viewed range {range_name}", extra={"user_id": user_id})
     except Exception as e:
-        logger.error(f"View command failed: {str(e)}", exc_info=True, extra={"user_id": user_id})
+        logger.error(f"View command failed: {str(e)}", extra={"user_id": user_id})
         await update.message.reply_text(f"Error viewing range `{range_name}`: {str(e)}")
 
 async def active_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -936,19 +881,18 @@ async def active_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
             payload_2(session, tokens["_token"])
             session.csrf_token = tokens["_token"]
 
-            response = payload_active(session)
-            active_data = parse_active_data(response.text)
-            if not active_data["ranges"]:
+            numbers_data = payload_numbers(session)
+            if not numbers_data["ranges"]:
                 await update.message.reply_text("No active ranges found in the panel.")
                 logger.info(f"User {user_id} checked active ranges: none found", extra={"user_id": user_id})
                 return
 
-            range_list = [f"`{r['range_name']}` (ID: `{r['termination_id']}`)" for r in active_data["ranges"]]
-            message = f"Active ranges ({active_data['total_numbers']} numbers):\n" + "\n".join(range_list)
+            range_list = [f"`{r['range_name']}` (ID: `{r['termination_id']}`)" for r in numbers_data["ranges"]]
+            message = f"Active ranges ({numbers_data['total_numbers']} numbers):\n" + "\n".join(range_list)
             await send_to_telegram(update.effective_chat.id, message, user_id)
             logger.info(f"User {user_id} checked active ranges", extra={"user_id": user_id})
     except Exception as e:
-        logger.error(f"Active command failed: {str(e)}", exc_info=True, extra={"user_id": user_id})
+        logger.error(f"Active command failed: {str(e)}", extra={"user_id": user_id})
         await update.message.reply_text(f"Error retrieving active ranges: {str(e)}")
 
 async def confirm_delete(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -991,7 +935,7 @@ async def confirm_delete(update: Update, context: ContextTypes.DEFAULT_TYPE):
             context.args = [new_range]
             await add_command(update, context)
     except Exception as e:
-        logger.error(f"Confirm delete failed: {str(e)}", exc_info=True, extra={"user_id": user_id})
+        logger.error(f"Confirm delete failed: {str(e)}", extra={"user_id": user_id})
         await update.message.reply_text(f"Error deleting existing range: {str(e)}")
     return ConversationHandler.END
 
@@ -1035,7 +979,7 @@ async def main():
         while True:
             await asyncio.sleep(3600)
     except Exception as e:
-        logger.error(f"Main loop failed: {str(e)}", exc_info=True, extra={"user_id": "N/A"})
+        logger.error(f"Main loop failed: {str(e)}", extra={"user_id": "N/A"})
         raise
 
 if __name__ == "__main__":
