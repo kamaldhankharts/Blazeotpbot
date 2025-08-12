@@ -7,13 +7,14 @@ import urllib.parse
 import asyncio
 from datetime import datetime
 from telegram import Bot, Update
-from telegram.ext import Application, CommandHandler, ContextTypes, ConversationHandler, MessageHandler, filters
+from telegram.ext import Application, CommandHandler, ContextTypes, ConversationHandler
 from google.oauth2.service_account import Credentials
 from googleapiclient.discovery import build
 from googleapiclient.errors import HttpError
 from bs4 import BeautifulSoup
 from tenacity import retry, stop_after_attempt, wait_fixed
 from dotenv import load_dotenv
+import pytz
 
 # Load environment variables from .env file for local development
 load_dotenv()
@@ -21,7 +22,7 @@ load_dotenv()
 # Set up logging
 logging.basicConfig(
     level=logging.INFO,
-    format='%(asctime)s - %(levelname)s - %(message)s',
+    format='%(asctime)s - %(levelname)s - %(user_id)s - %(message)s',
     handlers=[
         logging.FileHandler('bot.log'),
         logging.StreamHandler()
@@ -57,6 +58,7 @@ SHEETS = {
     "banned_users": "BannedUsers",
     "range_assignments": "RangeAssignments"
 }
+SUPER_ADMIN_ID = "5297298247"
 
 # ConversationHandler states
 CONFIRM_DELETE, CANCEL = range(2)
@@ -68,7 +70,6 @@ def get_sheets_service():
         if not credentials_json:
             raise ValueError("GOOGLE_CREDENTIALS environment variable not set")
         
-        # Parse credentials as JSON string or file path
         try:
             credentials_info = json.loads(credentials_json)
         except json.JSONDecodeError:
@@ -78,18 +79,16 @@ def get_sheets_service():
         credentials = Credentials.from_service_account_info(credentials_info, scopes=SCOPES)
         return build('sheets', 'v4', credentials=credentials)
     except Exception as e:
-        logger.error(f"Failed to initialize Google Sheets service: {str(e)}")
+        logger.error(f"Failed to initialize Google Sheets service: {str(e)}", extra={"user_id": "N/A"})
         raise
 
 def initialize_sheets():
     """Initialize required sheets if they don't exist."""
     service = get_sheets_service()
     try:
-        # Get existing sheets
         spreadsheet = service.spreadsheets().get(spreadsheetId=SHEET_ID).execute()
         existing_sheets = [sheet['properties']['title'] for sheet in spreadsheet['sheets']]
         
-        # Create missing sheets using batchUpdate
         for sheet_name in SHEETS.values():
             if sheet_name not in existing_sheets:
                 batch_update_request = {
@@ -105,9 +104,8 @@ def initialize_sheets():
                     spreadsheetId=SHEET_ID,
                     body=batch_update_request
                 ).execute()
-                logger.info(f"Created sheet: {sheet_name}")
+                logger.info(f"Created sheet: {sheet_name}", extra={"user_id": "N/A"})
                 
-                # Initialize headers
                 headers = {
                     SHEETS["admins"]: [["UserID"]],
                     SHEETS["approved_users"]: [["UserID"]],
@@ -120,9 +118,9 @@ def initialize_sheets():
                     valueInputOption="RAW",
                     body={"values": headers[sheet_name]}
                 ).execute()
-                logger.info(f"Initialized headers for sheet: {sheet_name}")
+                logger.info(f"Initialized headers for sheet: {sheet_name}", extra={"user_id": "N/A"})
     except HttpError as e:
-        logger.error(f"Failed to initialize sheets: {str(e)}")
+        logger.error(f"Failed to initialize sheets: {str(e)}", extra={"user_id": "N/A"})
         raise
 
 def get_user_data(sheet_name):
@@ -135,7 +133,7 @@ def get_user_data(sheet_name):
         ).execute()
         return [row[0] for row in result.get('values', [])]
     except HttpError as e:
-        logger.error(f"Failed to get data from {sheet_name}: {str(e)}")
+        logger.error(f"Failed to get data from {sheet_name}: {str(e)}", extra={"user_id": "N/A"})
         return []
 
 def get_range_assignments():
@@ -157,7 +155,7 @@ def get_range_assignments():
                 })
         return assignments
     except HttpError as e:
-        logger.error(f"Failed to get range assignments: {str(e)}")
+        logger.error(f"Failed to get range assignments: {str(e)}", extra={"user_id": "N/A"})
         return []
 
 def update_range_assignment(user_id, range_name, termination_id):
@@ -165,17 +163,54 @@ def update_range_assignment(user_id, range_name, termination_id):
     service = get_sheets_service()
     try:
         assignments = get_range_assignments()
-        row_index = len(assignments) + 2  # +2 for header and 1-based indexing
+        row_index = len(assignments) + 2
         service.spreadsheets().values().update(
             spreadsheetId=SHEET_ID,
             range=f"{SHEETS['range_assignments']}!A{row_index}:D{row_index}",
             valueInputOption="RAW",
             body={"values": [[user_id, range_name, termination_id, datetime.now().isoformat()]]}
         ).execute()
-        logger.info(f"Updated range assignment for user {user_id}: {range_name}")
+        logger.info(f"Updated range assignment for user {user_id}: {range_name}", extra={"user_id": user_id})
     except HttpError as e:
-        logger.error(f"Failed to update range assignment: {str(e)}")
+        logger.error(f"Failed to update range assignment: {str(e)}", extra={"user_id": user_id})
         raise
+
+def add_user_to_sheet(sheet_name, user_id):
+    """Add a user to the specified sheet."""
+    service = get_sheets_service()
+    try:
+        users = get_user_data(sheet_name)
+        if user_id not in users:
+            row_index = len(users) + 2
+            service.spreadsheets().values().update(
+                spreadsheetId=SHEET_ID,
+                range=f"{sheet_name}!A{row_index}",
+                valueInputOption="RAW",
+                body={"values": [[user_id]]}
+            ).execute()
+            logger.info(f"Added user {user_id} to {sheet_name}", extra={"user_id": user_id})
+        return True
+    except HttpError as e:
+        logger.error(f"Failed to add user {user_id} to {sheet_name}: {str(e)}", extra={"user_id": user_id})
+        return False
+
+def remove_user_from_sheet(sheet_name, user_id):
+    """Remove a user from the specified sheet."""
+    service = get_sheets_service()
+    try:
+        users = get_user_data(sheet_name)
+        if user_id in users:
+            row_index = users.index(user_id) + 2
+            service.spreadsheets().values().clear(
+                spreadsheetId=SHEET_ID,
+                range=f"{sheet_name}!A{row_index}"
+            ).execute()
+            logger.info(f"Removed user {user_id} from {sheet_name}", extra={"user_id": user_id})
+            return True
+        return False
+    except HttpError as e:
+        logger.error(f"Failed to remove user {user_id} from {sheet_name}: {str(e)}", extra={"user_id": user_id})
+        return False
 
 @retry(stop=stop_after_attempt(3), wait=wait_fixed(2))
 def payload_1(session):
@@ -188,10 +223,9 @@ def payload_1(session):
         token_match = re.search(r'<input type="hidden" name="_token" value="([^"]+)"', response.text)
         if not token_match:
             raise ValueError("Could not find _token in response")
-        session.csrf_token = token_match.group(1)  # Set CSRF token on session
         return {"_token": token_match.group(1)}
     except Exception as e:
-        logger.error(f"Payload 1 failed: {str(e)}")
+        logger.error(f"Payload 1 failed: {str(e)}", extra={"user_id": "N/A"})
         raise
 
 @retry(stop=stop_after_attempt(3), wait=wait_fixed(2))
@@ -221,14 +255,12 @@ def payload_2(session, _token):
             raise ValueError("Login failed, redirected back to /login")
         return response
     except Exception as e:
-        logger.error(f"Payload 2 failed: {str(e)}")
+        logger.error(f"Payload 2 failed: {str(e)}", extra={"user_id": "N/A"})
         raise
 
 @retry(stop=stop_after_attempt(3), wait=wait_fixed(2))
 def payload_10(session, range_name):
     """Search for a range to get termination ID."""
-    if not hasattr(session, 'csrf_token'):
-        raise AttributeError("Session missing csrf_token. Ensure login is completed.")
     url = f"https://www.ivasms.com/portal/numbers/test?draw=2&columns%5B0%5D%5Bdata%5D=range&columns%5B1%5D%5Bdata%5D=test_number&columns%5B2%5D%5Bdata%5D=term&columns%5B3%5D%5Bdata%5D=P2P&columns%5B4%5D%5Bdata%5D=A2P&columns%5B5%5D%5Bdata%5D=Limit_Range&columns%5B6%5D%5Bdata%5D=limit_cli_a2p&columns%5B7%5D%5Bdata%5D=limit_did_a2p&columns%5B8%5D%5Bdata%5D=limit_cli_did_a2p&columns%5B9%5D%5Bdata%5D=limit_cli_p2p&columns%5B10%5D%5Bdata%5D=limit_did_p2p&columns%5B11%5D%5Bdata%5D=limit_cli_did_p2p&columns%5B12%5D%5Bdata%5D=updated_at&columns%5B13%5D%5Bdata%5D=action&columns%5B13%5D%5Bsearchable%5D=false&columns%5B13%5D%5Borderable%5D=false&order%5B0%5D%5Bcolumn%5D=1&order%5B0%5D%5Bdir%5D=desc&start=0&length=50&search%5Bvalue%5D={urllib.parse.quote(range_name)}&_=1754468451369"
     headers = BASE_HEADERS.copy()
     headers.update({
@@ -245,7 +277,7 @@ def payload_10(session, range_name):
         response.raise_for_status()
         return response.json()
     except Exception as e:
-        logger.error(f"Payload 10 failed: {str(e)}")
+        logger.error(f"Payload 10 failed: {str(e)}", extra={"user_id": "N/A"})
         raise
 
 @retry(stop=stop_after_attempt(3), wait=wait_fixed(2))
@@ -271,7 +303,7 @@ def payload_11(session, termination_id, csrf_token):
         response.raise_for_status()
         return response
     except Exception as e:
-        logger.error(f"Payload 11 failed: {str(e)}")
+        logger.error(f"Payload 11 failed: {str(e)}", extra={"user_id": "N/A"})
         raise
 
 @retry(stop=stop_after_attempt(3), wait=wait_fixed(2))
@@ -297,7 +329,7 @@ def payload_12(session, termination_id, csrf_token):
         response.raise_for_status()
         return response.json()
     except Exception as e:
-        logger.error(f"Payload 12 failed: {str(e)}")
+        logger.error(f"Payload 12 failed: {str(e)}", extra={"user_id": "N/A"})
         raise
 
 @retry(stop=stop_after_attempt(3), wait=wait_fixed(2))
@@ -322,33 +354,22 @@ def payload_13(session, termination_id, csrf_token):
         response.raise_for_status()
         return response.json()
     except Exception as e:
-        logger.error(f"Payload 13 failed: {str(e)}")
+        logger.error(f"Payload 13 failed: {str(e)}", extra={"user_id": "N/A"})
         raise
 
 @retry(stop=stop_after_attempt(3), wait=wait_fixed(2))
 def payload_numbers(session):
-    """Retrieve active ranges and total number of numbers from /portal/live/my_sms."""
-    if not hasattr(session, 'csrf_token'):
-        raise AttributeError("Session missing csrf_token. Ensure login is completed.")
-    url = "https://www.ivasms.com/portal/live/my_sms"
+    """Retrieve active ranges and total number of numbers from /portal/numbers."""
+    url = "https://www.ivasms.com/portal/numbers"
     headers = BASE_HEADERS.copy()
-    headers.update({
-        "X-Csrf-Token": session.csrf_token,
-        "X-Requested-With": "XMLHttpRequest",
-        "Accept": "text/html, */*; q=0.01",
-    })
     try:
         response = session.get(url, headers=headers, timeout=30)
         response.raise_for_status()
         
-        # Parse HTML response
         soup = BeautifulSoup(response.text, 'html.parser')
+        total_numbers_match = soup.find('h6', class_='mb-0')
+        total_numbers = int(re.search(r'\((\d+)\)', total_numbers_match.text).group(1)) if total_numbers_match else 0
         
-        # Extract total number of active numbers
-        total_numbers_element = soup.find('h6', class_='mb-0')
-        total_numbers = int(re.search(r'\((\d+)\)', total_numbers_element.text).group(1)) if total_numbers_element else 0
-        
-        # Extract ranges and termination IDs from accordion
         ranges = []
         for card in soup.find_all('div', class_='card card-secondary'):
             range_link = card.find('a', class_='d-block w-100')
@@ -360,14 +381,12 @@ def payload_numbers(session):
         
         return {"total_numbers": total_numbers, "ranges": ranges}
     except Exception as e:
-        logger.error(f"Payload numbers failed: {str(e)}")
+        logger.error(f"Payload numbers failed: {str(e)}", extra={"user_id": "N/A"})
         raise
 
 @retry(stop=stop_after_attempt(3), wait=wait_fixed(2))
 def payload_search_numbers(session, range_name):
     """Search for numbers in a specific range."""
-    if not hasattr(session, 'csrf_token'):
-        raise AttributeError("Session missing csrf_token. Ensure login is completed.")
     url = f"https://www.ivasms.com/portal/numbers?draw=1&columns%5B0%5D%5Bdata%5D=number_id&columns%5B0%5D%5Bname%5D=id&columns%5B0%5D%5Borderable%5D=false&columns%5B1%5D%5Bdata%5D=Number&columns%5B2%5D%5Bdata%5D=range&columns%5B3%5D%5Bdata%5D=A2P&columns%5B4%5D%5Bdata%5D=P2P&columns%5B5%5D%5Bdata%5D=LimitA2P&columns%5B6%5D%5Bdata%5D=limit_cli_a2p&columns%5B7%5D%5Bdata%5D=limit_did_a2p&columns%5B8%5D%5Bdata%5D=limit_cli_did_a2p&columns%5B9%5D%5Bdata%5D=LimitP2P&columns%5B10%5D%5Bdata%5D=limit_cli_p2p&columns%5B11%5D%5Bdata%5D=limit_did_p2p&columns%5B12%5D%5Bdata%5D=limit_cli_did_p2p&columns%5B13%5D%5Bdata%5D=action&columns%5B13%5D%5Bsearchable%5D=false&columns%5B13%5D%5Borderable%5D=false&order%5B0%5D%5Bcolumn%5D=1&order%5B0%5D%5Bdir%5D=desc&start=0&length=100&search%5Bvalue%5D={urllib.parse.quote(range_name)}&_=1754654048583"
     headers = BASE_HEADERS.copy()
     headers.update({
@@ -384,22 +403,21 @@ def payload_search_numbers(session, range_name):
         data = response.json()
         numbers = [
             {
-                "number_id": re.search(r'value="(\d+)"', item["number_id"]).group(1),
+                "number_id": re.search(r'value="(\d+)"', item["number_id"]).group(1) if re.search(r'value="(\d+)"', item["number_id"]) else None,
                 "number": item["Number"],
                 "range": item["range"]
             }
             for item in data.get("data", [])
+            if item["number_id"] and item["Number"] and item["range"]
         ]
         return {"total": data.get("recordsFiltered", 0), "numbers": numbers}
     except Exception as e:
-        logger.error(f"Payload search numbers failed: {str(e)}")
+        logger.error(f"Payload search numbers failed: {str(e)}", extra={"user_id": "N/A"})
         raise
 
 @retry(stop=stop_after_attempt(3), wait=wait_fixed(2))
 def payload_delete_numbers(session, number_ids):
     """Delete multiple numbers from a range using bulk delete."""
-    if not hasattr(session, 'csrf_token'):
-        raise AttributeError("Session missing csrf_token. Ensure login is completed.")
     url = "https://www.ivasms.com/portal/numbers/return/number/bluck"
     headers = BASE_HEADERS.copy()
     headers.update({
@@ -418,14 +436,12 @@ def payload_delete_numbers(session, number_ids):
         response.raise_for_status()
         return response.json()
     except Exception as e:
-        logger.error(f"Payload delete numbers failed: {str(e)}")
+        logger.error(f"Payload delete numbers failed: {str(e)}", extra={"user_id": "N/A"})
         raise
 
-@retry(stop=stop_after_attempt(3), wait=stop_after_attempt(2))
+@retry(stop=stop_after_attempt(3), wait=wait_fixed(2))
 def payload_delete_all(session):
     """Delete all numbers in the panel."""
-    if not hasattr(session, 'csrf_token'):
-        raise AttributeError("Session missing csrf_token. Ensure login is completed.")
     url = "https://www.ivasms.com/portal/numbers/return/allnumber/bluck"
     headers = BASE_HEADERS.copy()
     headers.update({
@@ -443,7 +459,7 @@ def payload_delete_all(session):
         response.raise_for_status()
         return response.json()
     except Exception as e:
-        logger.error(f"Payload delete all failed: {str(e)}")
+        logger.error(f"Payload delete all failed: {str(e)}", extra={"user_id": "N/A"})
         raise
 
 def parse_ranges(response_json):
@@ -457,17 +473,30 @@ def parse_ranges(response_json):
                 ranges.append({"range_name": range_name, "termination_id": str(termination_id)})
         return ranges
     except Exception as e:
-        logger.error(f"Parse ranges failed: {str(e)}")
+        logger.error(f"Parse ranges failed: {str(e)}", extra={"user_id": "N/A"})
         return []
 
-async def send_to_telegram(chat_id, message):
-    """Send message to Telegram."""
+async def send_to_telegram(chat_id, message, user_id="N/A"):
+    """Send message to Telegram with pagination."""
     bot = Bot(token=os.getenv("BOT_TOKEN"))
     try:
-        await bot.send_message(chat_id=chat_id, text=message, parse_mode="Markdown")
-        logger.info(f"Sent message to chat {chat_id}")
+        messages = []
+        current_message = ""
+        for line in message.split("\n"):
+            if len(current_message) + len(line) + 1 > 4096:
+                messages.append(current_message)
+                current_message = line + "\n"
+            else:
+                current_message += line + "\n"
+        if current_message:
+            messages.append(current_message)
+        
+        for msg in messages:
+            await bot.send_message(chat_id=chat_id, text=msg.strip(), parse_mode="Markdown")
+            await asyncio.sleep(0.5)
+        logger.info(f"Sent message to chat {chat_id}", extra={"user_id": user_id})
     except Exception as e:
-        logger.error(f"Failed to send to Telegram: {str(e)}")
+        logger.error(f"Failed to send to Telegram: {str(e)}", extra={"user_id": user_id})
 
 async def check_user_permissions(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Check if user is authorized to use the bot."""
@@ -475,10 +504,14 @@ async def check_user_permissions(update: Update, context: ContextTypes.DEFAULT_T
     banned_users = get_user_data(SHEETS["banned_users"])
     if user_id in banned_users:
         await update.message.reply_text("You are banned from using this bot.")
+        logger.info(f"User {user_id} is banned", extra={"user_id": user_id})
         return False
     approved_users = get_user_data(SHEETS["approved_users"])
     if user_id not in approved_users:
-        await update.message.reply_text("You are not an approved user. Please contact an admin.")
+        await update.message.reply_text(
+            "You are not an approved user. Use `/request` to request approval from the super admin."
+        )
+        logger.info(f"User {user_id} is not approved", extra={"user_id": user_id})
         return False
     return True
 
@@ -486,35 +519,159 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Handle /start command to display bot usage."""
     user_id = str(update.effective_user.id)
     admins = get_user_data(SHEETS["admins"])
-    is_admin = user_id in admins
+    is_admin = user_id in admins or user_id == SUPER_ADMIN_ID
     message = (
         "Welcome to the IVASMS Bot!\n\n"
         "Available commands:\n"
+        "- `/request`: Request approval to use the bot.\n"
+        "- `/check`: List all active ranges in the panel.\n"
         "- `/add <range_name>`: Add a new range to the panel.\n"
         "- `/delete <range_name>`: Delete a range from the panel.\n"
         "- `/view <range_name>`: View numbers in a specific range.\n"
     )
     if is_admin:
         message += (
+            "- `/approve <user_id>`: Approve a user (admin only).\n"
+            "- `/unapprove <user_id>`: Remove approval from a user (admin only).\n"
+            "- `/ban <user_id>`: Ban a user (admin only).\n"
             "- `/deleteall`: Delete all ranges from the panel (admin only).\n"
             "- `/active`: List all active ranges in the panel (admin only).\n"
         )
-    message += "\nYou must be an approved user to use this bot. Contact an admin to get approved."
-    await update.message.reply_text(message, parse_mode="Markdown")
+    message += "\nYou must be an approved user to use most commands. Use `/request` to get approved."
+    await send_to_telegram(update.effective_chat.id, message, user_id)
 
-async def add_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Handle /add <range_name> command with confirmation for existing range."""
+async def request_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handle /request command for users to request approval."""
+    user_id = str(update.effective_user.id)
+    username = update.effective_user.username or "No username"
+    banned_users = get_user_data(SHEETS["banned_users"])
+    approved_users = get_user_data(SHEETS["approved_users"])
+    
+    if user_id in banned_users:
+        await update.message.reply_text("You are banned and cannot request approval.")
+        logger.info(f"Banned user {user_id} attempted to request approval", extra={"user_id": user_id})
+        return
+    if user_id in approved_users:
+        await update.message.reply_text("You are already an approved user.")
+        logger.info(f"Approved user {user_id} requested approval", extra={"user_id": user_id})
+        return
+    
+    try:
+        message = f"Approval request from user ID: `{user_id}`\nUsername: @{username}\nUse `/approve {user_id}` to approve or `/ban {user_id}` to ban."
+        await send_to_telegram(SUPER_ADMIN_ID, message, user_id)
+        await update.message.reply_text("Your approval request has been sent to the super admin.")
+        logger.info(f"User {user_id} requested approval", extra={"user_id": user_id})
+    except Exception as e:
+        logger.error(f"Failed to send approval request for {user_id}: {str(e)}", extra={"user_id": user_id})
+        await update.message.reply_text(f"Error sending approval request: {str(e)}")
+
+async def approve_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handle /approve <user_id> command for admins."""
+    user_id = str(update.effective_user.id)
+    admins = get_user_data(SHEETS["admins"])
+    if user_id not in admins and user_id != SUPER_ADMIN_ID:
+        await update.message.reply_text("Only admins can use the /approve command.")
+        logger.info(f"Non-admin {user_id} attempted /approve", extra={"user_id": user_id})
+        return
+    
+    if not context.args:
+        await update.message.reply_text("Please provide a user ID: `/approve <user_id>`", parse_mode="Markdown")
+        return
+    
+    target_user_id = context.args[0]
+    if add_user_to_sheet(SHEETS["approved_users"], target_user_id):
+        await update.message.reply_text(f"User `{target_user_id}` approved successfully.")
+        await send_to_telegram(target_user_id, "You have been approved to use the IVASMS bot!", target_user_id)
+        logger.info(f"User {target_user_id} approved by {user_id}", extra={"user_id": user_id})
+    else:
+        await update.message.reply_text(f"Failed to approve user `{target_user_id}`. Check logs for details.")
+        logger.error(f"Failed to approve user {target_user_id}", extra={"user_id": user_id})
+
+async def unapprove_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handle /unapprove <user_id> command for admins."""
+    user_id = str(update.effective_user.id)
+    admins = get_user_data(SHEETS["admins"])
+    if user_id not in admins and user_id != SUPER_ADMIN_ID:
+        await update.message.reply_text("Only admins can use the /unapprove command.")
+        logger.info(f"Non-admin {user_id} attempted /unapprove", extra={"user_id": user_id})
+        return
+    
+    if not context.args:
+        await update.message.reply_text("Please provide a user ID: `/unapprove <user_id>`", parse_mode="Markdown")
+        return
+    
+    target_user_id = context.args[0]
+    if remove_user_from_sheet(SHEETS["approved_users"], target_user_id):
+        await update.message.reply_text(f"User `{target_user_id}` unapproved successfully.")
+        await send_to_telegram(target_user_id, "Your approval to use the IVASMS bot has been revoked.", target_user_id)
+        logger.info(f"User {target_user_id} unapproved by {user_id}", extra={"user_id": user_id})
+    else:
+        await update.message.reply_text(f"User `{target_user_id}` was not approved or could not be unapproved.")
+        logger.info(f"User {target_user_id} not found in approved users", extra={"user_id": user_id})
+
+async def ban_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handle /ban <user_id> command for admins."""
+    user_id = str(update.effective_user.id)
+    admins = get_user_data(SHEETS["admins"])
+    if user_id not in admins and user_id != SUPER_ADMIN_ID:
+        await update.message.reply_text("Only admins can use the /ban command.")
+        logger.info(f"Non-admin {user_id} attempted /ban", extra={"user_id": user_id})
+        return
+    
+    if not context.args:
+        await update.message.reply_text("Please provide a user ID: `/ban <user_id>`", parse_mode="Markdown")
+        return
+    
+    target_user_id = context.args[0]
+    if add_user_to_sheet(SHEETS["banned_users"], target_user_id):
+        remove_user_from_sheet(SHEETS["approved_users"], target_user_id)
+        await update.message.reply_text(f"User `{target_user_id}` banned successfully.")
+        await send_to_telegram(target_user_id, "You have been banned from using the IVASMS bot.", target_user_id)
+        logger.info(f"User {target_user_id} banned by {user_id}", extra={"user_id": user_id})
+    else:
+        await update.message.reply_text(f"Failed to ban user `{target_user_id}`. Check logs for details.")
+        logger.error(f"Failed to ban user {target_user_id}", extra={"user_id": user_id})
+
+async def check_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handle /check command to list active ranges."""
+    user_id = str(update.effective_user.id)
     if not await check_user_permissions(update, context):
         return
 
+    try:
+        with requests.Session() as session:
+            tokens = payload_1(session)
+            payload_2(session, tokens["_token"])
+            session.csrf_token = tokens["_token"]
+
+            numbers_data = payload_numbers(session)
+            if not numbers_data["ranges"]:
+                await update.message.reply_text("No active ranges found in the panel.")
+                logger.info(f"User {user_id} checked active ranges: none found", extra={"user_id": user_id})
+                return
+
+            range_list = [f"`{r['range_name']}` (ID: `{r['termination_id']}`)" for r in numbers_data["ranges"]]
+            message = f"Active ranges ({numbers_data['total_numbers']} numbers):\n" + "\n".join(range_list)
+            await send_to_telegram(update.effective_chat.id, message, user_id)
+            logger.info(f"User {user_id} checked active ranges", extra={"user_id": user_id})
+    except Exception as e:
+        logger.error(f"Check command failed: {str(e)}", extra={"user_id": user_id})
+        await update.message.reply_text(f"Error retrieving active ranges: {str(e)}")
+
+async def add_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handle /add <range_name> command with confirmation for existing range."""
     user_id = str(update.effective_user.id)
+    if not await check_user_permissions(update, context):
+        return
+
     range_name = " ".join(context.args).strip() if context.args else ""
     if not range_name:
         await update.message.reply_text("Please provide a range name: `/add <range_name>`", parse_mode="Markdown")
+        logger.info(f"User {user_id} used /add without range name", extra={"user_id": user_id})
         return
 
     admins = get_user_data(SHEETS["admins"])
-    is_admin = user_id in admins
+    is_admin = user_id in admins or user_id == SUPER_ADMIN_ID
     assignments = get_range_assignments()
     user_assignment = next((a for a in assignments if a["user_id"] == user_id), None)
 
@@ -525,94 +682,95 @@ async def add_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
             "Delete it to add a new one? Reply with `/confirm_delete` or `/cancel`.",
             parse_mode="Markdown"
         )
+        logger.info(f"User {user_id} has existing range {user_assignment['range_name']}", extra={"user_id": user_id})
         return CONFIRM_DELETE
 
     try:
         with requests.Session() as session:
-            # Login
             tokens = payload_1(session)
             payload_2(session, tokens["_token"])
+            session.csrf_token = tokens["_token"]
 
-            # Check total numbers in panel
             numbers_data = payload_numbers(session)
             if numbers_data["total_numbers"] >= 1000:
-                await update.message.reply_text("Cannot add range: Panel has reached the 1000-number limit.", parse_mode="Markdown")
+                await update.message.reply_text("Cannot add range: Panel has reached the 1000-number limit.")
+                logger.info(f"User {user_id} attempted to add range but panel is full", extra={"user_id": user_id})
                 return
 
-            # Search for range
             response = payload_10(session, range_name)
             ranges = parse_ranges(response)
             matching_range = next((r for r in ranges if r["range_name"].lower() == range_name.lower()), None)
 
             if not matching_range:
-                await update.message.reply_text(f"Range `{range_name}` not found.", parse_mode="Markdown")
+                await update.message.reply_text(f"Range `{range_name}` not found. Please check the range name and try again.")
+                logger.info(f"User {user_id} attempted to add non-existent range {range_name}", extra={"user_id": user_id})
                 return
 
             termination_id = matching_range["termination_id"]
-
-            # Check termination details
             payload_11(session, termination_id, session.csrf_token)
-
-            # Add number to termination
             response = payload_12(session, termination_id, session.csrf_token)
-            if response.get("message", "").startswith("done add number"):
-                # Update Google Sheet
-                update_range_assignment(user_id, range_name, termination_id)
 
-                # Get numbers for the range
+            if response.get("message", "").startswith("done add number"):
+                update_range_assignment(user_id, range_name, termination_id)
                 numbers = payload_13(session, termination_id, session.csrf_token)
                 number_list = [f"`+{num['Number']}`" for num in numbers]
                 message = f"Range `{range_name}` added successfully!\n\nNumbers:\n" + "\n".join(number_list)
-                await send_to_telegram(update.effective_chat.id, message)
+                await send_to_telegram(update.effective_chat.id, message, user_id)
+                logger.info(f"User {user_id} added range {range_name}", extra={"user_id": user_id})
             else:
-                await update.message.reply_text(f"Failed to add range `{range_name}`: {response.get('message', 'Unknown error')}", parse_mode="Markdown")
+                await update.message.reply_text(f"Failed to add range `{range_name}`: {response.get('message', 'Unknown error')}")
+                logger.error(f"Failed to add range {range_name}: {response.get('message', 'Unknown error')}", extra={"user_id": user_id})
     except Exception as e:
-        logger.error(f"Add command failed: {str(e)}")
-        await update.message.reply_text(f"Error adding range `{range_name}`: {str(e)}", parse_mode="Markdown")
+        logger.error(f"Add command failed: {str(e)}", extra={"user_id": user_id})
+        await update.message.reply_text(f"Error adding range `{range_name}`: {str(e)}")
     return ConversationHandler.END
 
 async def delete_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Handle /delete <range_name> command."""
+    user_id = str(update.effective_user.id)
     if not await check_user_permissions(update, context):
         return
 
-    user_id = str(update.effective_user.id)
     range_name = " ".join(context.args).strip() if context.args else ""
     if not range_name:
         await update.message.reply_text("Please provide a range name: `/delete <range_name>`", parse_mode="Markdown")
+        logger.info(f"User {user_id} used /delete without range name", extra={"user_id": user_id})
         return
 
     admins = get_user_data(SHEETS["admins"])
-    is_admin = user_id in admins
+    is_admin = user_id in admins or user_id == SUPER_ADMIN_ID
     assignments = get_range_assignments()
     user_assignment = next((a for a in assignments if a["range_name"].lower() == range_name.lower()), None)
 
     if not is_admin and not user_assignment:
-        await update.message.reply_text(f"You don't have an active range named `{range_name}`.", parse_mode="Markdown")
+        await update.message.reply_text(f"You don't have an active range named `{range_name}`.")
+        logger.info(f"User {user_id} attempted to delete non-existent range {range_name}", extra={"user_id": user_id})
         return
     if not is_admin and user_assignment["user_id"] != user_id:
-        await update.message.reply_text("You can only delete your own range.", parse_mode="Markdown")
+        await update.message.reply_text("You can only delete your own range.")
+        logger.info(f"User {user_id} attempted to delete range {range_name} not owned", extra={"user_id": user_id})
         return
 
     try:
         with requests.Session() as session:
-            # Login
             tokens = payload_1(session)
             payload_2(session, tokens["_token"])
+            session.csrf_token = tokens["_token"]
 
-            # Search for numbers in the range
             search_result = payload_search_numbers(session, range_name)
             if not search_result["numbers"]:
-                await update.message.reply_text(f"No numbers found for range `{range_name}`.", parse_mode="Markdown")
+                await update.message.reply_text(f"No numbers found for range `{range_name}` in the panel. It may have been removed already.")
+                logger.info(f"No numbers found for range {range_name} by user {user_id}", extra={"user_id": user_id})
                 return
 
-            # Get number IDs
-            number_ids = [num["number_id"] for num in search_result["numbers"]]
+            number_ids = [num["number_id"] for num in search_result["numbers"] if num["number_id"]]
+            if not number_ids:
+                await update.message.reply_text(f"No valid number IDs found for range `{range_name}`. Contact support if this persists.")
+                logger.warning(f"No valid number IDs for range {range_name} by user {user_id}", extra={"user_id": user_id})
+                return
 
-            # Delete numbers
             response = payload_delete_numbers(session, number_ids)
             if "NumberDoneRemove" in response:
-                # Remove from Google Sheets
                 service = get_sheets_service()
                 row_index = next((i + 2 for i, a in enumerate(assignments) if a["range_name"].lower() == range_name.lower() and (is_admin or a["user_id"] == user_id)), None)
                 if row_index:
@@ -620,121 +778,127 @@ async def delete_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
                         spreadsheetId=SHEET_ID,
                         range=f"{SHEETS['range_assignments']}!A{row_index}:D{row_index}"
                     ).execute()
-                    logger.info(f"Deleted range assignment for {range_name} from sheets.")
+                    logger.info(f"Deleted range assignment for {range_name} from sheets by user {user_id}", extra={"user_id": user_id})
 
-                await update.message.reply_text(f"Range `{range_name}` deleted successfully!", parse_mode="Markdown")
+                await update.message.reply_text(f"Range `{range_name}` deleted successfully!")
+                logger.info(f"User {user_id} deleted range {range_name}", extra={"user_id": user_id})
             else:
-                await update.message.reply_text(f"Failed to delete range `{range_name}`: {response.get('message', 'Unknown error')}", parse_mode="Markdown")
+                await update.message.reply_text(f"Failed to delete range `{range_name}`: {response.get('message', 'Unknown error')}")
+                logger.error(f"Failed to delete range {range_name}: {response.get('message', 'Unknown error')}", extra={"user_id": user_id})
     except Exception as e:
-        logger.error(f"Delete command failed: {str(e)}")
-        await update.message.reply_text(f"Error deleting range `{range_name}`: {str(e)}", parse_mode="Markdown")
+        logger.error(f"Delete command failed: {str(e)}", extra={"user_id": user_id})
+        await update.message.reply_text(f"Error deleting range `{range_name}`: {str(e)}")
 
 async def delete_all_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Handle /deleteall command for admins."""
-    if not await check_user_permissions(update, context):
-        return
-
     user_id = str(update.effective_user.id)
     admins = get_user_data(SHEETS["admins"])
-    if user_id not in admins:
-        await update.message.reply_text("Only admins can use the /deleteall command.", parse_mode="Markdown")
+    if user_id not in admins and user_id != SUPER_ADMIN_ID:
+        await update.message.reply_text("Only admins can use the /deleteall command.")
+        logger.info(f"Non-admin {user_id} attempted /deleteall", extra={"user_id": user_id})
         return
 
     try:
         with requests.Session() as session:
-            # Login
             tokens = payload_1(session)
             payload_2(session, tokens["_token"])
+            session.csrf_token = tokens["_token"]
 
-            # Delete all numbers
             response = payload_delete_all(session)
             if response.get("NumberDoneRemove", []) == ["all numbers"]:
-                # Clear all range assignments from Google Sheets
                 service = get_sheets_service()
                 service.spreadsheets().values().clear(
                     spreadsheetId=SHEET_ID,
                     range=f"{SHEETS['range_assignments']}!A2:D"
                 ).execute()
-                logger.info("Cleared all range assignments from sheets.")
-                await update.message.reply_text("All ranges deleted successfully!", parse_mode="Markdown")
+                logger.info(f"Cleared all range assignments from sheets by user {user_id}", extra={"user_id": user_id})
+                await update.message.reply_text("All ranges deleted successfully!")
+                logger.info(f"User {user_id} deleted all ranges", extra={"user_id": user_id})
             else:
-                await update.message.reply_text(f"Failed to delete all ranges: {response.get('message', 'Unknown error')}", parse_mode="Markdown")
+                await update.message.reply_text(f"Failed to delete all ranges: {response.get('message', 'Unknown error')}")
+                logger.error(f"Failed to delete all ranges: {response.get('message', 'Unknown error')}", extra={"user_id": user_id})
     except Exception as e:
-        logger.error(f"Delete all command failed: {str(e)}")
-        await update.message.reply_text(f"Error deleting all ranges: {str(e)}", parse_mode="Markdown")
+        logger.error(f"Delete all command failed: {str(e)}", extra={"user_id": user_id})
+        await update.message.reply_text(f"Error deleting all ranges: {str(e)}")
 
 async def view_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Handle /view <range_name> command."""
+    user_id = str(update.effective_user.id)
     if not await check_user_permissions(update, context):
         return
 
-    user_id = str(update.effective_user.id)
     range_name = " ".join(context.args).strip() if context.args else ""
     if not range_name:
         await update.message.reply_text("Please provide a range name: `/view <range_name>`", parse_mode="Markdown")
+        logger.info(f"User {user_id} used /view without range name", extra={"user_id": user_id})
         return
 
     admins = get_user_data(SHEETS["admins"])
-    is_admin = user_id in admins
+    is_admin = user_id in admins or user_id == SUPER_ADMIN_ID
     assignments = get_range_assignments()
     user_assignment = next((a for a in assignments if a["range_name"].lower() == range_name.lower()), None)
 
     if not is_admin and not user_assignment:
-        await update.message.reply_text(f"You don't have an active range named `{range_name}`.", parse_mode="Markdown")
+        await update.message.reply_text(f"You don't have an active range named `{range_name}`.")
+        logger.info(f"User {user_id} attempted to view non-existent range {range_name}", extra={"user_id": user_id})
         return
     if not is_admin and user_assignment["user_id"] != user_id:
-        await update.message.reply_text("You can only view your own range.", parse_mode="Markdown")
+        await update.message.reply_text("You can only view your own range.")
+        logger.info(f"User {user_id} attempted to view range {range_name} not owned", extra={"user_id": user_id})
         return
 
     try:
         with requests.Session() as session:
-            # Login
             tokens = payload_1(session)
             payload_2(session, tokens["_token"])
+            session.csrf_token = tokens["_token"]
 
-            # Search for numbers in the range
             search_result = payload_search_numbers(session, range_name)
             if not search_result["numbers"]:
-                await update.message.reply_text(f"No numbers found for range `{range_name}`.", parse_mode="Markdown")
+                message = f"No numbers found for range `{range_name}` in the panel. Possible reasons:\n"
+                message += "- The range may have been removed from the panel.\n"
+                message += "- The range name may be incorrect (check spelling or case).\n"
+                message += "- The IVASMS API may be experiencing issues."
+                await update.message.reply_text(message)
+                logger.info(f"No numbers found for range {range_name} by user {user_id}", extra={"user_id": user_id})
                 return
 
             number_list = [f"`+{num['number']}`" for num in search_result["numbers"]]
             message = f"Numbers in range `{range_name}` ({search_result['total']}):\n" + "\n".join(number_list)
-            await send_to_telegram(update.effective_chat.id, message)
+            await send_to_telegram(update.effective_chat.id, message, user_id)
+            logger.info(f"User {user_id} viewed range {range_name}", extra={"user_id": user_id})
     except Exception as e:
-        logger.error(f"View command failed: {str(e)}")
-        await update.message.reply_text(f"Error viewing range `{range_name}`: {str(e)}", parse_mode="Markdown")
+        logger.error(f"View command failed: {str(e)}", extra={"user_id": user_id})
+        await update.message.reply_text(f"Error viewing range `{range_name}`: {str(e)}")
 
 async def active_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Handle /active command for admins."""
-    if not await check_user_permissions(update, context):
-        return
-
     user_id = str(update.effective_user.id)
     admins = get_user_data(SHEETS["admins"])
-    if user_id not in admins:
-        await update.message.reply_text("Only admins can use the /active command.", parse_mode="Markdown")
+    if user_id not in admins and user_id != SUPER_ADMIN_ID:
+        await update.message.reply_text("Only admins can use the /active command.")
+        logger.info(f"Non-admin {user_id} attempted /active", extra={"user_id": user_id})
         return
 
     try:
         with requests.Session() as session:
-            # Login
             tokens = payload_1(session)
             payload_2(session, tokens["_token"])
+            session.csrf_token = tokens["_token"]
 
-            # Get active ranges
             numbers_data = payload_numbers(session)
             if not numbers_data["ranges"]:
-                await update.message.reply_text("No active ranges found in the panel.", parse_mode="Markdown")
+                await update.message.reply_text("No active ranges found in the panel.")
+                logger.info(f"User {user_id} checked active ranges: none found", extra={"user_id": user_id})
                 return
 
-            # Format ranges in copiable format, one per line
             range_list = [f"`{r['range_name']}` (ID: `{r['termination_id']}`)" for r in numbers_data["ranges"]]
             message = f"Active ranges ({numbers_data['total_numbers']} numbers):\n" + "\n".join(range_list)
-            await send_to_telegram(update.effective_chat.id, message)
+            await send_to_telegram(update.effective_chat.id, message, user_id)
+            logger.info(f"User {user_id} checked active ranges", extra={"user_id": user_id})
     except Exception as e:
-        logger.error(f"Active command failed: {str(e)}")
-        await update.message.reply_text(f"Error retrieving active ranges: {str(e)}", parse_mode="Markdown")
+        logger.error(f"Active command failed: {str(e)}", extra={"user_id": user_id})
+        await update.message.reply_text(f"Error retrieving active ranges: {str(e)}")
 
 async def confirm_delete(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Handle /confirm_delete to delete existing range and add new one."""
@@ -742,6 +906,7 @@ async def confirm_delete(update: Update, context: ContextTypes.DEFAULT_TYPE):
     new_range = context.user_data.get("new_range")
     if not new_range:
         await update.message.reply_text("No new range specified. Please use `/add <range_name>` again.", parse_mode="Markdown")
+        logger.info(f"User {user_id} used /confirm_delete without new range", extra={"user_id": user_id})
         return ConversationHandler.END
 
     assignments = get_range_assignments()
@@ -754,17 +919,15 @@ async def confirm_delete(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     try:
         with requests.Session() as session:
-            # Login
             tokens = payload_1(session)
             payload_2(session, tokens["_token"])
+            session.csrf_token = tokens["_token"]
 
-            # Delete existing range
             search_result = payload_search_numbers(session, user_assignment["range_name"])
-            number_ids = [num["number_id"] for num in search_result["numbers"]]
+            number_ids = [num["number_id"] for num in search_result["numbers"] if num["number_id"]]
             if number_ids:
                 response = payload_delete_numbers(session, number_ids)
                 if "NumberDoneRemove" in response:
-                    # Remove from Google Sheets
                     service = get_sheets_service()
                     row_index = next((i + 2 for i, a in enumerate(assignments) if a["user_id"] == user_id), None)
                     if row_index:
@@ -772,29 +935,27 @@ async def confirm_delete(update: Update, context: ContextTypes.DEFAULT_TYPE):
                             spreadsheetId=SHEET_ID,
                             range=f"{SHEETS['range_assignments']}!A{row_index}:D{row_index}"
                         ).execute()
-                        logger.info(f"Deleted range assignment for {user_assignment['range_name']} from sheets.")
+                        logger.info(f"Deleted range assignment for {user_assignment['range_name']} from sheets by user {user_id}", extra={"user_id": user_id})
 
-            # Proceed to add new range
             context.args = [new_range]
             await add_command(update, context)
     except Exception as e:
-        logger.error(f"Confirm delete failed: {str(e)}")
-        await update.message.reply_text(f"Error deleting existing range: {str(e)}", parse_mode="Markdown")
+        logger.error(f"Confirm delete failed: {str(e)}", extra={"user_id": user_id})
+        await update.message.reply_text(f"Error deleting existing range: {str(e)}")
     return ConversationHandler.END
 
 async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Handle /cancel to abort range addition."""
+    user_id = str(update.effective_user.id)
     context.user_data.clear()
     await update.message.reply_text("Range addition cancelled.", parse_mode="Markdown")
+    logger.info(f"User {user_id} cancelled range addition", extra={"user_id": user_id})
     return ConversationHandler.END
 
 async def main():
     """Main function to run the bot."""
     try:
-        # Initialize Google Sheets
         initialize_sheets()
-
-        # Set up Telegram bot
         application = Application.builder().token(os.getenv("BOT_TOKEN")).build()
         conv_handler = ConversationHandler(
             entry_points=[CommandHandler("add", add_command)],
@@ -805,6 +966,11 @@ async def main():
             fallbacks=[CommandHandler("cancel", cancel)]
         )
         application.add_handler(CommandHandler("start", start_command))
+        application.add_handler(CommandHandler("request", request_command))
+        application.add_handler(CommandHandler("approve", approve_command))
+        application.add_handler(CommandHandler("unapprove", unapprove_command))
+        application.add_handler(CommandHandler("ban", ban_command))
+        application.add_handler(CommandHandler("check", check_command))
         application.add_handler(conv_handler)
         application.add_handler(CommandHandler("delete", delete_command))
         application.add_handler(CommandHandler("deleteall", delete_all_command))
@@ -813,13 +979,12 @@ async def main():
         await application.initialize()
         await application.start()
         await application.updater.start_polling()
-        logger.info("Telegram bot started")
+        logger.info("Telegram bot started", extra={"user_id": "N/A"})
 
-        # Keep the bot running
         while True:
             await asyncio.sleep(3600)
     except Exception as e:
-        logger.error(f"Main loop failed: {str(e)}")
+        logger.error(f"Main loop failed: {str(e)}", extra={"user_id": "N/A"})
         raise
 
 if __name__ == "__main__":
