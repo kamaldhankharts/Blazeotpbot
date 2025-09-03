@@ -43,7 +43,7 @@ SENDER_ID = 0
 
 async def send_to_telegram(sms):
     """Send SMS details to Telegram group with copiable number."""
-    bot = Bot(token=os.getenv("8250313433:AAHhPVIrCEUxOlKXNHkK2Epo525-ctYATic"))
+    bot = Bot(token=os.getenv("8250313433:AAGMZs2By7gC2AR9rIzs1GHAbE-H63nHekE"))
     message = (
         "📨 *New SMS Received*\n\n"
         f"📞 *Number*: `+{sms['number']}`\n"
@@ -728,3 +728,4 @@ async def main():
 if __name__ == "__main__":
 
     asyncio.run(main())
+
