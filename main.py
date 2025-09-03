@@ -43,7 +43,7 @@ SENDER_ID = 0
 
 async def send_to_telegram(sms):
     """Send SMS details to Telegram group with copiable number."""
-    bot = Bot(token=os.getenv("BOT_TOKEN"))
+    bot = Bot(token=os.getenv("8250313433:AAHhPVIrCEUxOlKXNHkK2Epo525-ctYATic"))
     message = (
         "📨 *New SMS Received*\n\n"
         f"📞 *Number*: `+{sms['number']}`\n"
@@ -53,8 +53,8 @@ async def send_to_telegram(sms):
     )
 
     try:
-        await bot.send_message(chat_id=os.getenv("CHAT_ID"), text=message, parse_mode="Markdown")
-        logger.info(f"Sent SMS to Telegram: {sms['message'][:50]}...")
+        await bot.send_message(chat_id=os.getenv("-1003004492030"), text=message, parse_mode="Markdown")
+        logger.info(f"Sent SMS to Telegram: {sms['-1003004492030'][:50]}...")
     except Exception as e:
         logger.error(f"Failed to send to Telegram: {str(e)}")
 
@@ -85,8 +85,8 @@ def payload_2(session, _token):
     
     data = {
         "_token": _token,
-        "email": os.getenv("IVASMS_EMAIL"),
-        "password": os.getenv("IVASMS_PASSWORD"),
+        "email": os.getenv("kamaldhankhararts@gmail.com"),
+        "password": os.getenv("K1a2m3a4l5"),
         "remember": "on",
         "g-recaptcha-response": "",
         "submit": "Login"
@@ -726,4 +726,5 @@ async def main():
         raise
 
 if __name__ == "__main__":
+
     asyncio.run(main())
