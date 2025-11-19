@@ -53,8 +53,8 @@ async def send_to_telegram(sms):
     )
 
     try:
-        await bot.send_message(chat_id=os.getenv("-1003004492030"), text=message, parse_mode="Markdown")
-        logger.info(f"Sent SMS to Telegram: {sms['-1003004492030'][:50]}...")
+        await bot.send_message(chat_id=os.getenv("-1003377700516"), text=message, parse_mode="Markdown")
+        logger.info(f"Sent SMS to Telegram: {sms['-1003377700516'][:50]}...")
     except Exception as e:
         logger.error(f"Failed to send to Telegram: {str(e)}")
 
@@ -85,8 +85,8 @@ def payload_2(session, _token):
     
     data = {
         "_token": _token,
-        "email": os.getenv("kamaldhankhararts@gmail.com"),
-        "password": os.getenv("K1a2m3a4l5"),
+        "email": os.getenv("abdullahalgeria@mailbox.in.ua"),
+        "password": os.getenv("@Abdullah1&"),
         "remember": "on",
         "g-recaptcha-response": "",
         "submit": "Login"
@@ -728,4 +728,5 @@ async def main():
 if __name__ == "__main__":
 
     asyncio.run(main())
+
 
